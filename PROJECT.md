@@ -39,9 +39,9 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Overall status:** 🟡 In progress
 
-**Current milestone:** Define the first useful version of the system before implementation.
+**Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Decide which engineering analytics questions and metrics the first version must support.
+**Next step:** Decide which GitHub entities must be stored to support the selected MVP analytics.
 
 ---
 
@@ -176,6 +176,25 @@ The implementation should therefore emphasize:
 
 ---
 
+### D-006 — MVP Analytics Scope
+
+**Decision:** The MVP will implement exactly seven primary analytics areas:
+
+- Pull request lead time
+- Time to first review
+- Pull request size statistics
+- Pull request size vs. review time
+- Contributor activity
+- Issue resolution time
+- Repository activity trends over time
+
+**Reasoning:**  
+This set is broad enough to demonstrate meaningful MongoDB aggregation, time-based analysis, relationships between GitHub entities, indexing, and senior backend design without turning the project into a large analytics product.
+
+Additional metrics are deferred until after the MVP.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -191,27 +210,37 @@ When a decision is made:
 
 ### Q-001 — Which analytics questions should the MVP answer?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidate metrics:
+The MVP will implement the following seven analytics areas:
 
-- Pull request lead time
-- Time to first review
-- Time from first review to merge
-- Pull request size
-- Pull request merge rate
-- Review participation
-- Contributor activity
-- Commit frequency
-- Issue backlog evolution
-- Issue resolution time
-- Repository activity trends
-- PR size vs. review time correlation
-- Contributor concentration / bus-factor-like indicators
+1. **Pull request lead time**  
+   Time from pull request creation to merge.
 
-**Decision:** _To be determined._
+2. **Time to first review**  
+   Time from pull request creation to the first submitted review.
 
-This is the **next question to resolve** because the required analytics should drive the data model.
+3. **Pull request size statistics**  
+   Analysis based on changed files, additions, and deletions.
+
+4. **Pull request size vs. review time**  
+   Analyze whether larger pull requests tend to take longer to review.
+
+5. **Contributor activity**  
+   Activity based on commits, pull requests, and reviews.
+
+6. **Issue resolution time**  
+   Time from issue creation to closure.
+
+7. **Repository activity trends over time**  
+   Weekly/monthly trends for commits, pull requests, and issues.
+
+**Decision:** These seven metrics are sufficient for the MVP.
+
+**Rationale:**  
+The goal is not to maximize the number of metrics, but to demonstrate different backend and MongoDB concerns: temporal analysis, aggregation, document relationships, trend analysis, indexing, and non-trivial query pipelines.
+
+Potential future analytics such as backlog evolution, merge-rate dashboards, release analytics, bus-factor-like indicators, and advanced contributor concentration are deferred until after the MVP.
 
 ---
 
@@ -697,8 +726,8 @@ Legend:
 - ✅ Decide that arbitrary repositories should eventually be supported
 - ✅ Choose repository name
 - ✅ Write repository description
-- 🟡 Define analytics requirements
-- ⬜ Define MVP scope
+- ✅ Define analytics requirements
+- 🟡 Define MVP scope
 - ⬜ Select initial sample repositories
 
 ---
@@ -787,20 +816,26 @@ docs/architecture.md
 
 ### Phase 6 — Analytics
 
-Exact analytics depend on Q-001.
+Confirmed MVP analytics:
 
-Provisional items:
-
-- ⬜ Repository activity overview
 - ⬜ Pull request lead time
 - ⬜ Time to first review
 - ⬜ Pull request size statistics
+- ⬜ Pull request size vs. review time
 - ⬜ Contributor activity
-- ⬜ Issue resolution statistics
-- ⬜ Activity trends over time
+- ⬜ Issue resolution time
+- ⬜ Repository activity trends over time
 - ⬜ MongoDB aggregation pipelines
 - ⬜ Analytics API endpoints
 - ⬜ Analytics tests
+
+Deferred analytics may include:
+
+- Issue backlog evolution
+- Pull request merge-rate dashboards
+- Release analytics
+- Contributor concentration
+- Bus-factor-like indicators
 
 ---
 
@@ -1032,25 +1067,24 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Define the MVP analytics requirements
+### NEXT: Define the required GitHub entities
 
-Resolve **Q-001**:
+Resolve **Q-002**:
 
-> Which engineering questions should the application answer?
+> Which GitHub entities must be stored to support the selected MVP analytics?
 
-The goal is to choose approximately **5–8 useful metrics/questions** for the MVP.
+The chosen analytics are now fixed, so the next task is to determine the minimum useful persisted dataset.
 
-These metrics will determine:
+This decision should answer:
 
-- Which GitHub API data is required
-- Which entities must be persisted
-- MongoDB collection design
-- Embedding vs. references
-- Required indexes
-- Required aggregation pipelines
-- API endpoints
+- Which GitHub entities are required
+- Which entities should have their own MongoDB collection
+- Which data should be embedded
+- Which GitHub fields are actually needed
+- Which data can be fetched but not persisted
+- Which relationships must be preserved for analytics
 
-Do **not** design the MongoDB schema before this question is sufficiently resolved.
+Do **not** finalize the MongoDB schema before this entity-level scope is sufficiently resolved.
 
 ---
 
@@ -1063,6 +1097,7 @@ Do **not** design the MongoDB schema before this question is sufficiently resolv
 | D-003 | Use real public GitHub repositories as input | ✅ Confirmed |
 | D-004 | Support arbitrary public repositories eventually | ✅ Confirmed |
 | D-005 | Position the project as senior backend engineering, not CRUD | ✅ Confirmed |
+| D-006 | Use seven selected engineering analytics metrics for the MVP | ✅ Confirmed |
 
 ---
 
@@ -1078,6 +1113,20 @@ Do **not** design the MongoDB schema before this question is sufficiently resolv
 - Repository description defined.
 - `PROJECT.md` created as the project's persistent planning and status document.
 - Next task identified: define MVP analytics questions before designing the MongoDB schema.
+
+### 2026-09-07
+
+- Q-001 resolved.
+- MVP analytics scope fixed at seven metrics:
+  - pull request lead time,
+  - time to first review,
+  - pull request size statistics,
+  - pull request size vs. review time,
+  - contributor activity,
+  - issue resolution time,
+  - repository activity trends over time.
+- Additional analytics explicitly deferred until after the MVP.
+- Next task changed to Q-002: determine which GitHub entities and fields must be persisted.
 
 ---
 
