@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Decide which GitHub entities must be stored to support the selected MVP analytics.
+**Next step:** Design the detailed MongoDB document schema, including embedded structures, required fields, and indexes.
 
 ---
 
@@ -186,12 +186,27 @@ The implementation should therefore emphasize:
 - Pull request size vs. review time
 - Contributor activity
 - Issue resolution time
-- Repository activity trends over time
+- Repository activity trends over time for pull requests and issues
 
 **Reasoning:**  
 This set is broad enough to demonstrate meaningful MongoDB aggregation, time-based analysis, relationships between GitHub entities, indexing, and senior backend design without turning the project into a large analytics product.
 
+Repository-level commit activity was intentionally removed from the MVP after the commit-modeling decision in D-007.
+
 Additional metrics are deferred until after the MVP.
+
+---
+
+### D-007 — Commit Modeling
+
+**Decision:** Pull-request commits will be embedded in `pull_requests.commits[]`. The MVP will not use a separate `commits` collection.
+
+**Reasoning:**  
+Within the current analytics scope, commits are primarily relevant as part of the pull request aggregate. Embedding them keeps related data together and supports commit-per-PR analytics without unnecessary cross-collection access.
+
+Because direct pushes to the default branch can exist independently of pull requests, repository-wide commit activity would require a separate repository commit model. That metric is not important enough for the MVP to justify the extra collection and synchronization complexity.
+
+**Consequence:** Repository activity trends in the MVP cover pull requests and issues, not repository-wide commit history.
 
 ---
 
@@ -246,28 +261,60 @@ Potential future analytics such as backlog evolution, merge-rate dashboards, rel
 
 ### Q-002 — Which GitHub entities should be stored?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidates:
+The MVP will persist the following top-level collections:
 
-- Repository
-- Commit
-- Pull request
-- Pull request review
-- Issue
-- Contributor
-- User
-- Label
-- Release
-- Branch
+- `repositories`
+- `pull_requests`
+- `issues`
+- `sync_states`
 
-Questions to answer:
+The following data will be embedded inside pull request documents:
 
-- Which objects belong in separate collections?
-- Which objects should be embedded?
-- Which GitHub data should not be persisted at all?
+- `reviews[]`
+- `commits[]`
 
-**Decision:** _To be determined after Q-001._
+The following will **not** be stored as separate collections in the MVP:
+
+- Users / contributors
+- Labels
+- Releases
+- Branches
+- Review comments
+- Changed-file details
+- Commits
+
+Small user identity snapshots will be embedded where needed, for example:
+
+```json
+{
+  "github_id": 12345,
+  "login": "developer1"
+}
+```
+
+**Commit modeling decision:**
+
+Pull-request commits are treated as part of the pull request aggregate and are embedded in `pull_requests.commits[]`.
+
+A separate repository-level `commits` collection will not be created for the MVP.
+
+**Rationale:**
+
+For the selected analytics use cases, commits are primarily useful in the context of a pull request. Embedding them allows direct analysis of:
+
+- commits per pull request,
+- average commits per pull request,
+- commit-count distribution,
+- pull request size vs. commit count,
+- commit count vs. review time.
+
+This keeps the MongoDB model aligned with the actual analytical aggregate instead of reproducing the GitHub API resource model.
+
+Repository-level commit activity is therefore removed from the MVP analytics scope.
+
+**Decision:** Store repository, pull request, issue, and sync-state documents as top-level collections. Embed reviews and commits in pull requests. Do not create a separate commits collection.
 
 ---
 
@@ -791,9 +838,9 @@ docs/architecture.md
 
 - ⬜ Implement repository persistence
 - ⬜ Implement pull request persistence
-- ⬜ Implement review persistence
+- ⬜ Implement embedded review persistence in pull requests
+- ⬜ Implement embedded commit persistence in pull requests
 - ⬜ Implement issue persistence
-- ⬜ Implement commit persistence
 - ⬜ Implement indexes
 - ⬜ Implement idempotent upserts
 - ⬜ Add MongoDB schema validation where useful
@@ -824,7 +871,7 @@ Confirmed MVP analytics:
 - ⬜ Pull request size vs. review time
 - ⬜ Contributor activity
 - ⬜ Issue resolution time
-- ⬜ Repository activity trends over time
+- ⬜ Repository activity trends over time for pull requests and issues
 - ⬜ MongoDB aggregation pipelines
 - ⬜ Analytics API endpoints
 - ⬜ Analytics tests
@@ -1067,24 +1114,28 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Define the required GitHub entities
+### NEXT: Design the MongoDB document schema
 
-Resolve **Q-002**:
+Resolve **Q-003**:
 
-> Which GitHub entities must be stored to support the selected MVP analytics?
+> What should the concrete MongoDB document model look like?
 
-The chosen analytics are now fixed, so the next task is to determine the minimum useful persisted dataset.
+The entity-level scope is now fixed.
 
-This decision should answer:
+The next task should define:
 
-- Which GitHub entities are required
-- Which entities should have their own MongoDB collection
-- Which data should be embedded
-- Which GitHub fields are actually needed
-- Which data can be fetched but not persisted
-- Which relationships must be preserved for analytics
+- concrete fields for `repositories`,
+- concrete fields for `pull_requests`,
+- concrete structure of embedded `reviews[]`,
+- concrete structure of embedded `commits[]`,
+- concrete fields for `issues`,
+- concrete fields for `sync_states`,
+- which source fields from GitHub are intentionally ignored,
+- required unique and compound indexes,
+- expected query patterns,
+- document growth considerations.
 
-Do **not** finalize the MongoDB schema before this entity-level scope is sufficiently resolved.
+Do not add new top-level collections unless a concrete analytics or synchronization requirement justifies them.
 
 ---
 
@@ -1098,6 +1149,7 @@ Do **not** finalize the MongoDB schema before this entity-level scope is suffici
 | D-004 | Support arbitrary public repositories eventually | ✅ Confirmed |
 | D-005 | Position the project as senior backend engineering, not CRUD | ✅ Confirmed |
 | D-006 | Use seven selected engineering analytics metrics for the MVP | ✅ Confirmed |
+| D-007 | Embed PR commits and avoid a separate commits collection in the MVP | ✅ Confirmed |
 
 ---
 
@@ -1127,6 +1179,13 @@ Do **not** finalize the MongoDB schema before this entity-level scope is suffici
   - repository activity trends over time.
 - Additional analytics explicitly deferred until after the MVP.
 - Next task changed to Q-002: determine which GitHub entities and fields must be persisted.
+- Q-002 resolved.
+- Top-level MVP collections fixed as `repositories`, `pull_requests`, `issues`, and `sync_states`.
+- Reviews will be embedded in pull request documents.
+- Pull-request commits will be embedded in pull request documents.
+- A separate `commits` collection will not be created for the MVP.
+- Repository-wide commit activity was removed from the MVP analytics scope.
+- Next task changed to Q-003: design the detailed MongoDB document schema.
 
 ---
 
