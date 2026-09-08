@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Design the detailed MongoDB document schema, including embedded structures, required fields, and indexes.
+**Next step:** Decide which MongoDB-specific features the project should intentionally demonstrate.
 
 ---
 
@@ -210,6 +210,21 @@ Because direct pushes to the default branch can exist independently of pull requ
 
 ---
 
+### D-008 — MongoDB Document Schema
+
+**Decision:** The MVP uses four top-level collections: `repositories`, `pull_requests`, `issues`, and `sync_states`.
+
+Pull request `reviews[]` and `commits[]` are embedded. Lightweight user identity snapshots are embedded where needed.
+
+Derived analytics values such as lead time, first-review time, commit count, and issue resolution time are calculated in aggregation pipelines rather than persisted.
+
+Indexes are centered on repository-scoped access patterns. Additional multikey indexes will only be introduced when query measurements justify them.
+
+**Reasoning:**  
+The schema is designed around the project's analytics use cases and aggregate boundaries rather than mirroring GitHub's API resources or applying relational normalization mechanically.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -320,20 +335,299 @@ Repository-level commit activity is therefore removed from the MVP analytics sco
 
 ### Q-003 — What should the MongoDB document model look like?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Topics:
+The MVP uses four top-level collections:
 
-- Embedded vs. referenced documents
-- Collection boundaries
-- Denormalization strategy
-- Snapshot data vs. normalized identity data
-- Historical values
-- Update frequency
-- Document growth
-- MongoDB document size constraints
+- `repositories`
+- `pull_requests`
+- `issues`
+- `sync_states`
 
-**Decision:** _To be determined after analytics requirements are known._
+Pull request reviews and commits are embedded in pull request documents.
+
+Derived analytics values are calculated at query time rather than persisted unless later performance measurements justify denormalization.
+
+---
+
+#### `repositories`
+
+Example:
+
+```json
+{
+  "_id": "ObjectId",
+  "github_id": 123456,
+  "owner": "spring-projects",
+  "name": "spring-boot",
+  "full_name": "spring-projects/spring-boot",
+  "default_branch": "main",
+  "html_url": "https://github.com/spring-projects/spring-boot",
+  "github_created_at": "datetime",
+  "github_updated_at": "datetime",
+  "created_at": "datetime",
+  "updated_at": "datetime"
+}
+```
+
+Indexes:
+
+```javascript
+{ github_id: 1 } // unique
+{ full_name: 1 } // unique
+```
+
+`full_name` is retained as a natural repository identifier for API use and human readability.
+
+---
+
+#### `pull_requests`
+
+Example:
+
+```json
+{
+  "_id": "ObjectId",
+  "repository_id": "ObjectId",
+  "github_id": 1234567,
+  "number": 19234,
+  "title": "Fix transaction handling",
+  "author": {
+    "github_id": 1234,
+    "login": "developer1"
+  },
+  "state": "closed",
+  "draft": false,
+  "created_at": "datetime",
+  "updated_at": "datetime",
+  "closed_at": "datetime|null",
+  "merged_at": "datetime|null",
+  "additions": 130,
+  "deletions": 42,
+  "changed_files": 8,
+  "base_branch": "main",
+  "commits": [
+    {
+      "sha": "abc123",
+      "author": {
+        "github_id": 1234,
+        "login": "developer1",
+        "name": "Developer Name"
+      },
+      "committed_at": "datetime"
+    }
+  ],
+  "reviews": [
+    {
+      "github_id": 98765,
+      "reviewer": {
+        "github_id": 5678,
+        "login": "reviewer1"
+      },
+      "state": "APPROVED",
+      "submitted_at": "datetime"
+    }
+  ]
+}
+```
+
+Recommended indexes:
+
+```javascript
+{ repository_id: 1, number: 1 } // unique
+{ repository_id: 1, created_at: 1 }
+{ repository_id: 1, merged_at: 1 }
+{ repository_id: 1, "author.github_id": 1 }
+```
+
+Additional indexes on embedded review or commit fields should only be added after measuring real query patterns.
+
+---
+
+#### Embedded `reviews[]`
+
+Store only data required for analytics:
+
+```json
+{
+  "github_id": 98765,
+  "reviewer": {
+    "github_id": 5678,
+    "login": "reviewer1"
+  },
+  "state": "APPROVED",
+  "submitted_at": "datetime"
+}
+```
+
+Do not persist review bodies, URLs, permissions, avatar URLs, or unrelated GitHub payload fields in the MVP.
+
+Reviews are embedded because their lifecycle and analytics usage are tightly coupled to their pull request.
+
+---
+
+#### Embedded `commits[]`
+
+Example:
+
+```json
+{
+  "sha": "abcdef123",
+  "author": {
+    "github_id": 1234,
+    "login": "developer1",
+    "name": "Developer Name"
+  },
+  "committed_at": "datetime"
+}
+```
+
+`github_id` and `login` may be `null` because not every Git commit author can be mapped to a GitHub account.
+
+Email addresses are intentionally not persisted because they are not required by the MVP analytics.
+
+Commits are embedded because the selected use cases analyze commits mainly in the context of a pull request.
+
+---
+
+#### `issues`
+
+Example:
+
+```json
+{
+  "_id": "ObjectId",
+  "repository_id": "ObjectId",
+  "github_id": 827364,
+  "number": 4382,
+  "title": "Application fails during startup",
+  "author": {
+    "github_id": 12345,
+    "login": "developer2"
+  },
+  "state": "closed",
+  "created_at": "datetime",
+  "updated_at": "datetime",
+  "closed_at": "datetime|null"
+}
+```
+
+Recommended indexes:
+
+```javascript
+{ repository_id: 1, number: 1 } // unique
+{ repository_id: 1, created_at: 1 }
+{ repository_id: 1, closed_at: 1 }
+{ repository_id: 1, "author.github_id": 1 }
+```
+
+The MVP intentionally does not persist:
+
+- body
+- comments
+- labels
+- assignees
+- milestone
+- reactions
+
+These fields are not required by the selected analytics.
+
+---
+
+#### `sync_states`
+
+Synchronization state is stored per repository and resource type.
+
+Example:
+
+```json
+{
+  "_id": "ObjectId",
+  "repository_id": "ObjectId",
+  "resource": "pull_requests",
+  "status": "completed",
+  "last_started_at": "datetime",
+  "last_completed_at": "datetime",
+  "checkpoint": {
+    "updated_since": "datetime"
+  },
+  "processed_count": 487,
+  "last_error": null
+}
+```
+
+Recommended unique index:
+
+```javascript
+{ repository_id: 1, resource: 1 }
+```
+
+This allows pull request and issue synchronization to fail, retry, and recover independently.
+
+---
+
+#### Derived values
+
+The MVP will calculate derived analytics values instead of persisting them.
+
+Examples:
+
+- pull request lead time
+- time to first review
+- review duration
+- commit count
+- issue resolution time
+
+For example, commit count can be calculated using:
+
+```javascript
+{ $size: "$commits" }
+```
+
+Denormalized derived fields may be added later only if profiling shows a measurable performance benefit.
+
+---
+
+#### Multikey index constraint
+
+Both `commits[]` and `reviews[]` are arrays.
+
+MongoDB compound multikey indexes cannot index multiple independent array fields from the same document in a single compound index.
+
+Therefore, the design must avoid indexes such as:
+
+```javascript
+{
+  "commits.author.github_id": 1,
+  "reviews.reviewer.github_id": 1
+}
+```
+
+This is an accepted trade-off of embedding both collections inside the pull request aggregate.
+
+---
+
+#### Logical document model
+
+```text
+repositories
+    |
+    +-------------------+
+    |                   |
+    v                   v
+pull_requests         issues
+    |
+    +-- commits[]
+    |
+    +-- reviews[]
+
+repositories
+    |
+    v
+sync_states
+```
+
+**Decision:** Use document-oriented aggregates centered on pull requests rather than reproducing the GitHub API resource model or a normalized SQL-style schema.
 
 ---
 
@@ -784,10 +1078,10 @@ Legend:
 - ⬜ Select GitHub REST / GraphQL strategy
 - ⬜ Select Python framework
 - ⬜ Select MongoDB driver / ODM
-- ⬜ Define domain model
-- ⬜ Define MongoDB collections
-- ⬜ Decide embedding vs. referencing
-- ⬜ Define indexes
+- ✅ Define domain model
+- ✅ Define MongoDB collections
+- ✅ Decide embedding vs. referencing
+- ✅ Define initial indexes
 - ⬜ Define synchronization architecture
 - ⬜ Define error handling strategy
 - ⬜ Define idempotency strategy
@@ -1114,28 +1408,31 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Design the MongoDB document schema
+### NEXT: Select MongoDB features to demonstrate intentionally
 
-Resolve **Q-003**:
+Resolve **Q-004**:
 
-> What should the concrete MongoDB document model look like?
+> Which MongoDB capabilities should be part of the implementation because they naturally support the selected use cases?
 
-The entity-level scope is now fixed.
+Candidates include:
 
-The next task should define:
+- aggregation pipelines
+- `$match`
+- `$project`
+- `$group`
+- `$unwind`
+- `$facet`
+- date aggregation operators
+- window functions
+- multikey indexes
+- compound indexes
+- schema validation
+- `explain()` and query-plan analysis
+- bulk writes / upserts
 
-- concrete fields for `repositories`,
-- concrete fields for `pull_requests`,
-- concrete structure of embedded `reviews[]`,
-- concrete structure of embedded `commits[]`,
-- concrete fields for `issues`,
-- concrete fields for `sync_states`,
-- which source fields from GitHub are intentionally ignored,
-- required unique and compound indexes,
-- expected query patterns,
-- document growth considerations.
+Features should only be selected when they solve a real project requirement or materially improve the senior-backend demonstration.
 
-Do not add new top-level collections unless a concrete analytics or synchronization requirement justifies them.
+Avoid adding MongoDB features merely for technology-list breadth.
 
 ---
 
@@ -1150,6 +1447,7 @@ Do not add new top-level collections unless a concrete analytics or synchronizat
 | D-005 | Position the project as senior backend engineering, not CRUD | ✅ Confirmed |
 | D-006 | Use seven selected engineering analytics metrics for the MVP | ✅ Confirmed |
 | D-007 | Embed PR commits and avoid a separate commits collection in the MVP | ✅ Confirmed |
+| D-008 | Use four top-level collections with embedded PR reviews and commits | ✅ Confirmed |
 
 ---
 
@@ -1186,6 +1484,13 @@ Do not add new top-level collections unless a concrete analytics or synchronizat
 - A separate `commits` collection will not be created for the MVP.
 - Repository-wide commit activity was removed from the MVP analytics scope.
 - Next task changed to Q-003: design the detailed MongoDB document schema.
+- Q-003 resolved.
+- Detailed MongoDB document schema defined.
+- `reviews[]` and `commits[]` confirmed as embedded pull request data.
+- Initial repository-scoped unique and compound indexes defined.
+- Derived analytics values will be calculated at query time rather than persisted.
+- Multikey index limitations for the two embedded arrays documented as an accepted trade-off.
+- Next task changed to Q-004: select MongoDB features to demonstrate intentionally.
 
 ---
 
