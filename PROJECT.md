@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Select the Python web framework for the API layer.
+**Next step:** Define the incremental synchronization strategy and checkpoint semantics.
 
 ---
 
@@ -235,6 +235,32 @@ The MVP will defer `$lookup`, change streams, TTL indexes, text search, time-ser
 
 **Reasoning:**  
 The project should demonstrate MongoDB depth through features that solve real problems rather than maximize the number of technologies or operators used.
+
+---
+
+### D-010 — FastAPI Framework
+
+**Decision:** Use FastAPI as the HTTP API framework.
+
+FastAPI is restricted to the transport layer. Application, synchronization, analytics, and persistence logic must remain framework-independent.
+
+---
+
+### D-011 — Direct PyMongo Usage
+
+**Decision:** Use the official PyMongo driver directly, preferably through its asynchronous API.
+
+Do not use an ODM in the MVP. MongoDB-specific behavior should remain explicit, while PyMongo access is isolated behind repository/data-access abstractions.
+
+---
+
+### D-012 — Synchronous MVP Synchronization
+
+**Decision:** Repository synchronization runs synchronously inside the API request in the MVP.
+
+Synchronization is bounded by configurable import limits and only one sync may run per repository at a time.
+
+The synchronization service must remain independent from FastAPI so the same logic can later be executed by a background worker.
 
 ---
 
@@ -720,72 +746,158 @@ Window functions may become useful later for rolling averages, smoothing, or mor
 
 ### Q-005 — Which Python web framework should be used?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Primary candidate:
+**Decision:** Use FastAPI as the HTTP API framework.
 
-- FastAPI
+**Rationale:**
 
-Alternatives:
+FastAPI fits the project because it provides:
 
-- Flask
-- Django / Django REST Framework
+- strong integration with Python type hints,
+- native asynchronous request handling,
+- automatic OpenAPI documentation,
+- lightweight API-centric architecture,
+- good testability,
+- minimal framework overhead compared with a full-stack framework.
 
-Likely direction: FastAPI because the project is API-centric and should demonstrate modern Python typing and asynchronous I/O.
+FastAPI will be limited to the API / transport layer.
 
-**Decision:** _To be confirmed._
+Business logic, synchronization, persistence, and analytics logic must remain independent from FastAPI.
+
+Target layering:
+
+```text
+FastAPI
+   |
+   v
+Application / Service layer
+   |
+   +---------> GitHub client
+   |
+   +---------> Repository layer
+   |                |
+   |                v
+   |             MongoDB
+   |
+   +---------> Analytics layer
+```
+
+This keeps the framework replaceable and prevents HTTP concerns from leaking into domain or persistence logic.
 
 ---
 
 ### Q-006 — Which MongoDB Python driver / abstraction layer should be used?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidates:
+**Decision:** Use the official PyMongo driver directly instead of an ODM.
 
-- PyMongo
-- PyMongo Async API
-- ODMantic
-- Beanie
-- MongoEngine
+Prefer the current asynchronous PyMongo API so MongoDB access integrates naturally with FastAPI and other async I/O.
 
-Key decision:
+**Rationale:**
 
-Should the project demonstrate MongoDB directly through the official driver, or use an ODM?
+MongoDB itself is a core technology being demonstrated by this project. Using PyMongo directly keeps the following concepts explicit and visible:
 
-Possible preference for portfolio value: retain enough direct MongoDB interaction that document modeling, indexes, and aggregation pipelines remain visible.
+- collections,
+- document shapes,
+- indexes,
+- aggregation pipelines,
+- bulk writes,
+- upserts,
+- schema validation,
+- query-plan analysis with `explain()`.
 
-**Decision:** _To be determined._
+An ODM such as Beanie, ODMantic, or MongoEngine would hide part of the MongoDB-specific design that the project is intended to demonstrate.
+
+Persistence details must still be isolated behind a repository/data-access layer so application services do not depend directly on PyMongo.
+
+Target dependency direction:
+
+```text
+FastAPI
+  |
+Service layer
+  |
+Repository layer
+  |
+PyMongo
+  |
+MongoDB
+```
+
+An ODM should only be introduced later if a concrete maintainability problem justifies it.
 
 ---
 
 ### Q-007 — Sync architecture: synchronous request, background job, or both?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Potential model:
+**Decision:** The MVP will execute repository synchronization synchronously within the API request.
+
+Example flow:
 
 ```text
-POST /repositories
+POST /repositories/{id}/sync
         |
         v
-Register repository
+RepositorySyncService
+        |
+        +--> GitHub API
+        |
+        +--> MongoDB bulk upserts
         |
         v
-Background synchronization job
-        |
-        v
-GitHub API -> MongoDB
+HTTP response with sync summary
 ```
 
-Questions:
+Example response shape:
 
-- Should imports happen asynchronously?
-- Should an API request start an import and return a job ID?
-- Do we need a job/status collection?
-- What scheduler should later run incremental updates?
+```json
+{
+  "repository": "spring-projects/spring-boot",
+  "pull_requests_processed": 500,
+  "issues_processed": 500,
+  "status": "completed",
+  "duration_ms": 8421
+}
+```
 
-**Decision:** _To be determined._
+**Constraints:**
+
+- Synchronization volume must be deliberately bounded.
+- Import limits must be configurable.
+- A repository must not have multiple concurrent synchronization processes.
+- The synchronization service must be independent from FastAPI.
+- The implementation must remain easy to move to a background worker later.
+
+The initial working limits are expected to be approximately:
+
+- up to 500 pull requests,
+- up to 500 issues,
+- associated reviews and commits required by those pull requests.
+
+Exact limits may be adjusted after measuring GitHub API behavior and request duration.
+
+**Rationale:**
+
+A synchronous request keeps the MVP architecture simple and avoids introducing queues, workers, schedulers, and job orchestration before they solve a real problem.
+
+At the same time, the synchronization logic will live in an application service rather than the endpoint itself:
+
+```text
+FastAPI endpoint
+      |
+      v
+RepositorySyncService
+      |
+      +--> GitHubClient
+      |
+      +--> Persistence
+```
+
+This allows the same synchronization logic to be triggered by a background worker later without redesigning the core implementation.
 
 ---
 
@@ -1136,13 +1248,13 @@ Legend:
 ### Phase 1 — Architecture and Data Model
 
 - ⬜ Select GitHub REST / GraphQL strategy
-- ⬜ Select Python framework
-- ⬜ Select MongoDB driver / ODM
+- ✅ Select FastAPI as Python framework
+- ✅ Select direct PyMongo usage
 - ✅ Define domain model
 - ✅ Define MongoDB collections
 - ✅ Decide embedding vs. referencing
 - ✅ Define initial indexes
-- ⬜ Define synchronization architecture
+- ✅ Define synchronous MVP synchronization architecture
 - ⬜ Define error handling strategy
 - ⬜ Define idempotency strategy
 - ⬜ Define configuration model
@@ -1468,33 +1580,24 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Select the Python web framework
+### NEXT: Define incremental synchronization
 
-Resolve **Q-005**:
+Resolve **Q-008**:
 
-> Which Python web framework should be used for the API layer?
+> How should incremental synchronization work?
 
-Primary candidate:
+The next decision should define:
 
-- FastAPI
+- how the last successful sync is tracked,
+- whether GitHub `updated_at` values can be used safely,
+- how pagination and checkpoints interact,
+- how idempotent upserts prevent duplicates,
+- how partial failures are handled,
+- how an interrupted sync can be restarted,
+- whether pull requests and issues need independent checkpoints,
+- when a full re-sync is required.
 
-Alternatives:
-
-- Flask
-- Django / Django REST Framework
-
-The decision should consider:
-
-- type safety and Python typing support,
-- asynchronous I/O,
-- OpenAPI generation,
-- dependency injection,
-- testability,
-- project complexity,
-- portfolio value,
-- suitability for an API-centric backend.
-
-The current likely direction is FastAPI, but the decision should be confirmed explicitly.
+The design should preserve the current MVP constraint that synchronization runs synchronously inside the API request while remaining restartable and safe.
 
 ---
 
@@ -1511,6 +1614,9 @@ The current likely direction is FastAPI, but the decision should be confirmed ex
 | D-007 | Embed PR commits and avoid a separate commits collection in the MVP | ✅ Confirmed |
 | D-008 | Use four top-level collections with embedded PR reviews and commits | ✅ Confirmed |
 | D-009 | Use aggregation pipelines, selective indexes, bulk upserts, schema validation, and query-plan analysis | ✅ Confirmed |
+| D-010 | Use FastAPI as the API framework and keep it confined to the transport layer | ✅ Confirmed |
+| D-011 | Use PyMongo directly instead of an ODM | ✅ Confirmed |
+| D-012 | Run bounded repository synchronization synchronously in the MVP API request | ✅ Confirmed |
 
 ---
 
@@ -1561,6 +1667,18 @@ The current likely direction is FastAPI, but the decision should be confirmed ex
 - Next task changed to Q-005: select the Python web framework.
 
 ---
+
+### 2026-09-17
+
+- Q-005 resolved: FastAPI selected as the HTTP API framework.
+- FastAPI is explicitly limited to the API/transport layer.
+- Q-006 resolved: direct PyMongo usage selected instead of an ODM.
+- The async PyMongo API is preferred so database access fits the asynchronous backend model.
+- Q-007 resolved: repository synchronization will run synchronously inside the API request for the MVP.
+- Synchronization volume will be bounded by configurable limits.
+- Only one synchronization may run per repository at a time.
+- Synchronization logic will remain in an application service so it can later be moved to a background worker without redesigning the core logic.
+- Next task changed to Q-008: define incremental synchronization and checkpoint semantics.
 
 ## 18. Project Completion Definition
 
