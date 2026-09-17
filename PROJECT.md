@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Decide which MongoDB-specific features the project should intentionally demonstrate.
+**Next step:** Select the Python web framework for the API layer.
 
 ---
 
@@ -222,6 +222,19 @@ Indexes are centered on repository-scoped access patterns. Additional multikey i
 
 **Reasoning:**  
 The schema is designed around the project's analytics use cases and aggregate boundaries rather than mirroring GitHub's API resources or applying relational normalization mechanically.
+
+---
+
+### D-009 — MongoDB Feature Scope
+
+**Decision:** The MVP will use aggregation pipelines as its primary analytics mechanism, together with compound indexes, selective multikey indexes, bulk upserts, schema validation, and `explain()`-based query-plan analysis.
+
+`$unwind` and `$facet` will be used where they naturally support embedded-array analytics and combined repository-level views.
+
+The MVP will defer `$lookup`, change streams, TTL indexes, text search, time-series collections, and window functions unless a concrete requirement emerges.
+
+**Reasoning:**  
+The project should demonstrate MongoDB depth through features that solve real problems rather than maximize the number of technologies or operators used.
 
 ---
 
@@ -633,28 +646,75 @@ sync_states
 
 ### Q-004 — Which MongoDB features should the project intentionally demonstrate?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidates:
+The MVP will intentionally demonstrate the following MongoDB capabilities because they directly support the selected use cases.
+
+#### Core analytics features
+
+- Aggregation pipelines
+- `$match`
+- `$project`
+- `$group`
+- `$unwind`
+- MongoDB date operators
+- `$facet`
+
+These form the primary analytics mechanism of the application.
+
+#### Indexing and performance
 
 - Compound indexes
-- Multikey indexes
-- TTL indexes
-- Aggregation pipelines
+- Multikey indexes where justified by real query patterns
+- `explain()` and query-plan analysis
+
+Indexes should be designed around repository-scoped access patterns and validated through actual query plans rather than added speculatively.
+
+#### Data ingestion and synchronization
+
+- Bulk writes
+- Upserts
+
+These are required for efficient, idempotent GitHub data synchronization.
+
+#### Data integrity
+
+- MongoDB schema validation
+
+MongoDB's flexible document model will be used intentionally, while schema validation protects required structure and data quality.
+
+#### Explicitly deferred for the MVP
+
+The following MongoDB features are not part of the MVP unless a concrete requirement appears later:
+
 - `$lookup`
-- `$group`
-- `$facet`
-- Window functions
-- Text search
-- Schema validation
 - Change streams
+- TTL indexes
+- Text search
 - Time-series collections
+- Window functions
 
-Important principle:
+Window functions may become useful later for rolling averages, smoothing, or more advanced trend analytics.
 
-Features should only be added when they fit the use case. The project should not artificially use MongoDB features merely to increase the technology list.
+`$lookup` is intentionally not required in the MVP because pull request reviews and commits are embedded in the pull request aggregate.
 
-**Decision:** _To be determined._
+#### Feature-to-use-case mapping
+
+| Use case | MongoDB capability |
+|---|---|
+| Pull request lead time | `$match`, `$project`, date operators |
+| Time to first review | `$unwind`, `$group`, date operators |
+| Pull request size statistics | `$group`, `$avg`, `$min`, `$max` |
+| Pull request size vs. review time | `$project`, `$unwind`, aggregation pipeline |
+| Contributor activity | `$unwind`, `$group` |
+| Issue resolution time | Date operators, `$group` |
+| Repository activity trends | Date grouping |
+| Repository overview endpoint | `$facet` |
+| Import / synchronization | Bulk writes, upserts |
+| Query performance | Compound/multikey indexes, `explain()` |
+| Data integrity | Schema validation |
+
+**Decision:** Use aggregation pipelines as the main analytics mechanism, supported by compound and selective multikey indexes, bulk upserts, schema validation, and query-plan analysis. Use `$facet` and `$unwind` where naturally required. Defer advanced MongoDB features that do not yet solve a concrete project requirement.
 
 ---
 
@@ -1408,31 +1468,33 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Select MongoDB features to demonstrate intentionally
+### NEXT: Select the Python web framework
 
-Resolve **Q-004**:
+Resolve **Q-005**:
 
-> Which MongoDB capabilities should be part of the implementation because they naturally support the selected use cases?
+> Which Python web framework should be used for the API layer?
 
-Candidates include:
+Primary candidate:
 
-- aggregation pipelines
-- `$match`
-- `$project`
-- `$group`
-- `$unwind`
-- `$facet`
-- date aggregation operators
-- window functions
-- multikey indexes
-- compound indexes
-- schema validation
-- `explain()` and query-plan analysis
-- bulk writes / upserts
+- FastAPI
 
-Features should only be selected when they solve a real project requirement or materially improve the senior-backend demonstration.
+Alternatives:
 
-Avoid adding MongoDB features merely for technology-list breadth.
+- Flask
+- Django / Django REST Framework
+
+The decision should consider:
+
+- type safety and Python typing support,
+- asynchronous I/O,
+- OpenAPI generation,
+- dependency injection,
+- testability,
+- project complexity,
+- portfolio value,
+- suitability for an API-centric backend.
+
+The current likely direction is FastAPI, but the decision should be confirmed explicitly.
 
 ---
 
@@ -1448,6 +1510,7 @@ Avoid adding MongoDB features merely for technology-list breadth.
 | D-006 | Use seven selected engineering analytics metrics for the MVP | ✅ Confirmed |
 | D-007 | Embed PR commits and avoid a separate commits collection in the MVP | ✅ Confirmed |
 | D-008 | Use four top-level collections with embedded PR reviews and commits | ✅ Confirmed |
+| D-009 | Use aggregation pipelines, selective indexes, bulk upserts, schema validation, and query-plan analysis | ✅ Confirmed |
 
 ---
 
@@ -1491,6 +1554,11 @@ Avoid adding MongoDB features merely for technology-list breadth.
 - Derived analytics values will be calculated at query time rather than persisted.
 - Multikey index limitations for the two embedded arrays documented as an accepted trade-off.
 - Next task changed to Q-004: select MongoDB features to demonstrate intentionally.
+- Q-004 resolved.
+- Aggregation pipelines selected as the primary analytics mechanism.
+- `$unwind`, `$facet`, date operators, compound indexes, selective multikey indexes, bulk upserts, schema validation, and `explain()` were included in the MVP technology scope.
+- `$lookup`, change streams, TTL indexes, text search, time-series collections, and window functions were deferred unless justified by a future requirement.
+- Next task changed to Q-005: select the Python web framework.
 
 ---
 
