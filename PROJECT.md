@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Define the incremental synchronization strategy and checkpoint semantics.
+**Next step:** Select the Python web framework for the API layer.
 
 ---
 
@@ -238,29 +238,25 @@ The project should demonstrate MongoDB depth through features that solve real pr
 
 ---
 
-### D-010 — FastAPI Framework
+### D-013 — Incremental Synchronization Strategy
 
-**Decision:** Use FastAPI as the HTTP API framework.
+**Decision:** Use independent resource-level `updated_at` checkpoints for pull requests and issues. Writes are idempotent upserts, and checkpoints advance only after a complete successful resource synchronization.
 
-FastAPI is restricted to the transport layer. Application, synchronization, analytics, and persistence logic must remain framework-independent.
-
----
-
-### D-011 — Direct PyMongo Usage
-
-**Decision:** Use the official PyMongo driver directly, preferably through its asynchronous API.
-
-Do not use an ODM in the MVP. MongoDB-specific behavior should remain explicit, while PyMongo access is isolated behind repository/data-access abstractions.
+Interrupted runs safely replay data from the previous successful checkpoint instead of persisting fragile pagination state.
 
 ---
 
-### D-012 — Synchronous MVP Synchronization
+### D-014 — GitHub Rate-Limit and Retry Strategy
 
-**Decision:** Repository synchronization runs synchronously inside the API request in the MVP.
+**Decision:** Use authenticated GitHub API requests, serial execution in the MVP, rate-limit header monitoring, bounded exponential backoff, finite retries, and conditional requests where useful.
 
-Synchronization is bounded by configurable import limits and only one sync may run per repository at a time.
+---
 
-The synchronization service must remain independent from FastAPI so the same logic can later be executed by a background worker.
+### D-015 — GitHub REST API for MVP
+
+**Decision:** Use GitHub REST API for the MVP.
+
+GraphQL is deferred as a later comparison or optimization exercise rather than included in the initial implementation.
 
 ---
 
@@ -746,219 +742,225 @@ Window functions may become useful later for rolling averages, smoothing, or mor
 
 ### Q-005 — Which Python web framework should be used?
 
-**Status:** DECIDED
+**Status:** OPEN
 
-**Decision:** Use FastAPI as the HTTP API framework.
+Primary candidate:
 
-**Rationale:**
+- FastAPI
 
-FastAPI fits the project because it provides:
+Alternatives:
 
-- strong integration with Python type hints,
-- native asynchronous request handling,
-- automatic OpenAPI documentation,
-- lightweight API-centric architecture,
-- good testability,
-- minimal framework overhead compared with a full-stack framework.
+- Flask
+- Django / Django REST Framework
 
-FastAPI will be limited to the API / transport layer.
+Likely direction: FastAPI because the project is API-centric and should demonstrate modern Python typing and asynchronous I/O.
 
-Business logic, synchronization, persistence, and analytics logic must remain independent from FastAPI.
-
-Target layering:
-
-```text
-FastAPI
-   |
-   v
-Application / Service layer
-   |
-   +---------> GitHub client
-   |
-   +---------> Repository layer
-   |                |
-   |                v
-   |             MongoDB
-   |
-   +---------> Analytics layer
-```
-
-This keeps the framework replaceable and prevents HTTP concerns from leaking into domain or persistence logic.
+**Decision:** _To be confirmed._
 
 ---
 
 ### Q-006 — Which MongoDB Python driver / abstraction layer should be used?
 
-**Status:** DECIDED
+**Status:** OPEN
 
-**Decision:** Use the official PyMongo driver directly instead of an ODM.
+Candidates:
 
-Prefer the current asynchronous PyMongo API so MongoDB access integrates naturally with FastAPI and other async I/O.
+- PyMongo
+- PyMongo Async API
+- ODMantic
+- Beanie
+- MongoEngine
 
-**Rationale:**
+Key decision:
 
-MongoDB itself is a core technology being demonstrated by this project. Using PyMongo directly keeps the following concepts explicit and visible:
+Should the project demonstrate MongoDB directly through the official driver, or use an ODM?
 
-- collections,
-- document shapes,
-- indexes,
-- aggregation pipelines,
-- bulk writes,
-- upserts,
-- schema validation,
-- query-plan analysis with `explain()`.
+Possible preference for portfolio value: retain enough direct MongoDB interaction that document modeling, indexes, and aggregation pipelines remain visible.
 
-An ODM such as Beanie, ODMantic, or MongoEngine would hide part of the MongoDB-specific design that the project is intended to demonstrate.
-
-Persistence details must still be isolated behind a repository/data-access layer so application services do not depend directly on PyMongo.
-
-Target dependency direction:
-
-```text
-FastAPI
-  |
-Service layer
-  |
-Repository layer
-  |
-PyMongo
-  |
-MongoDB
-```
-
-An ODM should only be introduced later if a concrete maintainability problem justifies it.
+**Decision:** _To be determined._
 
 ---
 
 ### Q-007 — Sync architecture: synchronous request, background job, or both?
 
-**Status:** DECIDED
+**Status:** OPEN
 
-**Decision:** The MVP will execute repository synchronization synchronously within the API request.
-
-Example flow:
+Potential model:
 
 ```text
-POST /repositories/{id}/sync
+POST /repositories
         |
         v
-RepositorySyncService
-        |
-        +--> GitHub API
-        |
-        +--> MongoDB bulk upserts
+Register repository
         |
         v
-HTTP response with sync summary
+Background synchronization job
+        |
+        v
+GitHub API -> MongoDB
 ```
 
-Example response shape:
+Questions:
 
-```json
-{
-  "repository": "spring-projects/spring-boot",
-  "pull_requests_processed": 500,
-  "issues_processed": 500,
-  "status": "completed",
-  "duration_ms": 8421
-}
-```
+- Should imports happen asynchronously?
+- Should an API request start an import and return a job ID?
+- Do we need a job/status collection?
+- What scheduler should later run incremental updates?
 
-**Constraints:**
-
-- Synchronization volume must be deliberately bounded.
-- Import limits must be configurable.
-- A repository must not have multiple concurrent synchronization processes.
-- The synchronization service must be independent from FastAPI.
-- The implementation must remain easy to move to a background worker later.
-
-The initial working limits are expected to be approximately:
-
-- up to 500 pull requests,
-- up to 500 issues,
-- associated reviews and commits required by those pull requests.
-
-Exact limits may be adjusted after measuring GitHub API behavior and request duration.
-
-**Rationale:**
-
-A synchronous request keeps the MVP architecture simple and avoids introducing queues, workers, schedulers, and job orchestration before they solve a real problem.
-
-At the same time, the synchronization logic will live in an application service rather than the endpoint itself:
-
-```text
-FastAPI endpoint
-      |
-      v
-RepositorySyncService
-      |
-      +--> GitHubClient
-      |
-      +--> Persistence
-```
-
-This allows the same synchronization logic to be triggered by a background worker later without redesigning the core implementation.
+**Decision:** _To be determined._
 
 ---
 
 ### Q-008 — How should incremental synchronization work?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Topics:
+**Decision:** Incremental synchronization will use resource-specific checkpoints stored in `sync_states`.
 
-- Last successful synchronization timestamp
-- GitHub `updated_at`
-- Pagination state
-- Duplicate prevention
-- Idempotent upserts
-- Partial failures
-- Retry policy
-- Restartability
-- Sync checkpoints
+Pull requests and issues will have independent synchronization state.
 
-**Decision:** _To be determined._
+#### Issues
+
+Use the GitHub REST API `since` filtering semantics based on resource update timestamps.
+
+The persisted checkpoint stores the latest successfully completed `updated_at` boundary.
+
+#### Pull requests
+
+The pull request API does not provide the same direct `since` filtering model.
+
+Pull requests will therefore be requested ordered by update time, newest first, and pagination will continue until the previously completed `updated_at` checkpoint is reached.
+
+#### Pagination
+
+Follow GitHub pagination links returned by the API.
+
+Pagination position itself is temporary execution state and is **not** persisted as the long-term checkpoint.
+
+The durable checkpoint is based on resource update time.
+
+#### Writes
+
+All persistence during synchronization must be idempotent.
+
+Use upserts based on repository-scoped GitHub identifiers so that replaying already processed items is safe.
+
+#### Checkpoint advancement
+
+A resource checkpoint is advanced only after the complete synchronization of that resource succeeds.
+
+If a synchronization fails:
+
+- the previous successful checkpoint remains active,
+- the next run may reprocess already seen records,
+- idempotent upserts prevent duplicates.
+
+#### Pull request child data
+
+When a pull request is detected as new or updated, its embedded:
+
+- `reviews[]`
+- `commits[]`
+
+are fetched again and rebuilt from the source data.
+
+This keeps the pull request aggregate internally consistent.
+
+#### Restartability
+
+The synchronization design intentionally prefers safe replay over fragile page-level resume state.
+
+**Decision summary:** Persist resource-level `updated_at` checkpoints, use idempotent upserts, advance checkpoints only after full resource success, and allow safe replay after interruption.
 
 ---
 
 ### Q-009 — How should GitHub API rate limiting be handled?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Topics:
+**Decision:** Use authenticated GitHub REST API requests and apply bounded retry/backoff behavior.
 
-- Authenticated vs. unauthenticated requests
-- Rate-limit headers
-- Backoff
-- Retry
-- Request throttling
-- API caching
-- Incremental sync optimization
+#### Authentication
 
-**Decision:** _To be determined._
+Even for public repositories, GitHub API access should be authenticated through a configured token.
+
+#### Rate-limit monitoring
+
+Inspect relevant GitHub rate-limit headers on responses, including:
+
+- `x-ratelimit-remaining`
+- `x-ratelimit-reset`
+- `retry-after` when present
+
+#### Request concurrency
+
+The MVP will execute GitHub API requests serially.
+
+Parallel request fan-out is intentionally deferred to reduce complexity and lower the risk of secondary rate limiting.
+
+#### Retry strategy
+
+For transient network failures and retryable server errors:
+
+- use bounded exponential backoff,
+- use a finite retry budget,
+- fail the synchronization cleanly after retries are exhausted.
+
+Example progression:
+
+```text
+1s -> 2s -> 4s -> ...
+```
+
+The exact values remain implementation details and should be configurable where useful.
+
+#### Rate-limit handling
+
+- If `Retry-After` is provided, respect it.
+- If the primary rate limit is exhausted, wait until the reset boundary rather than blindly retrying.
+- Secondary-rate-limit responses use a bounded backoff strategy.
+- Never retry indefinitely.
+
+#### Conditional requests
+
+Use conditional requests such as `ETag` / `If-None-Match` where they provide measurable value and simplify repeated reads.
+
+They are an optimization, not a mandatory requirement for every endpoint.
+
+**Decision summary:** Authenticated requests, serial execution, explicit rate-limit awareness, bounded exponential backoff, finite retries, and conditional requests where useful.
 
 ---
 
 ### Q-010 — GitHub REST API or GraphQL API?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Options:
+**Decision:** Use the GitHub REST API for the MVP.
 
-- GitHub REST API
-- GitHub GraphQL API
-- Hybrid
+**Rationale:**
 
-Factors:
+REST is preferred initially because it:
 
-- Implementation complexity
-- Request count
-- Nested data retrieval
-- Pagination
-- Rate limits
-- Portfolio value
+- keeps the first synchronization implementation simpler,
+- maps clearly to the selected entities,
+- is easier to debug,
+- fits the existing pagination, checkpoint, retry, and rate-limit strategy,
+- reduces implementation risk while Python and MongoDB remain the main learning/demo focus.
 
-**Decision:** _To be determined._
+GraphQL is explicitly deferred rather than rejected.
+
+A later phase may reimplement or supplement one import/analytics path with GitHub GraphQL and compare:
+
+- number of requests,
+- payload size,
+- pagination complexity,
+- rate-limit behavior,
+- implementation complexity,
+- maintainability.
+
+This comparison may become a useful portfolio extension because it demonstrates architectural trade-off analysis rather than simply adding another technology.
+
+**Decision summary:** REST for the MVP; GraphQL reserved for a later comparison/optimization exercise.
 
 ---
 
@@ -1247,16 +1249,16 @@ Legend:
 
 ### Phase 1 — Architecture and Data Model
 
-- ⬜ Select GitHub REST / GraphQL strategy
-- ✅ Select FastAPI as Python framework
-- ✅ Select direct PyMongo usage
+- ✅ Select GitHub REST API for the MVP
+- ⬜ Select Python framework
+- ⬜ Select MongoDB driver / ODM
 - ✅ Define domain model
 - ✅ Define MongoDB collections
 - ✅ Decide embedding vs. referencing
 - ✅ Define initial indexes
-- ✅ Define synchronous MVP synchronization architecture
+- ⬜ Define synchronization architecture
 - ⬜ Define error handling strategy
-- ⬜ Define idempotency strategy
+- ✅ Define idempotency strategy
 - ⬜ Define configuration model
 - ⬜ Create architecture documentation
 
@@ -1288,14 +1290,14 @@ docs/architecture.md
 
 - ⬜ Implement authentication
 - ⬜ Implement repository metadata retrieval
-- ⬜ Implement pagination
+- ⬜ Implement GitHub Link-header pagination
 - ⬜ Implement pull request retrieval
 - ⬜ Implement review retrieval
 - ⬜ Implement issue retrieval
 - ⬜ Implement commit retrieval
 - ⬜ Handle API errors
-- ⬜ Handle rate limits
-- ⬜ Implement retry/backoff
+- ⬜ Handle GitHub rate limits and reset semantics
+- ⬜ Implement bounded retry/backoff
 - ⬜ Add GitHub API client tests
 
 ---
@@ -1318,8 +1320,8 @@ docs/architecture.md
 
 - ⬜ Implement initial import
 - ⬜ Persist synchronization state
-- ⬜ Implement incremental import
-- ⬜ Handle interrupted synchronization
+- ⬜ Implement checkpoint-based incremental import
+- ⬜ Handle interrupted synchronization with safe replay
 - ⬜ Handle partial failures
 - ⬜ Add synchronization status endpoint
 - ⬜ Add sync metrics/logging
@@ -1580,24 +1582,27 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Define incremental synchronization
+### NEXT: Decide application API authentication
 
-Resolve **Q-008**:
+Resolve **Q-011**:
 
-> How should incremental synchronization work?
+> Does the application's own FastAPI API need authentication in the MVP?
 
-The next decision should define:
+Possible choices:
 
-- how the last successful sync is tracked,
-- whether GitHub `updated_at` values can be used safely,
-- how pagination and checkpoints interact,
-- how idempotent upserts prevent duplicates,
-- how partial failures are handled,
-- how an interrupted sync can be restarted,
-- whether pull requests and issues need independent checkpoints,
-- when a full re-sync is required.
+- no authentication for local/demo use,
+- simple API key,
+- JWT-based authentication.
 
-The design should preserve the current MVP constraint that synchronization runs synchronously inside the API request while remaining restartable and safe.
+The decision should consider:
+
+- portfolio value,
+- implementation complexity,
+- whether authentication contributes to the core learning goals,
+- whether the application will be deployed publicly,
+- whether protecting GitHub synchronization endpoints is necessary in the MVP.
+
+Authentication should only be included if it adds meaningful backend engineering value without distracting from the Python + MongoDB focus.
 
 ---
 
@@ -1614,9 +1619,9 @@ The design should preserve the current MVP constraint that synchronization runs 
 | D-007 | Embed PR commits and avoid a separate commits collection in the MVP | ✅ Confirmed |
 | D-008 | Use four top-level collections with embedded PR reviews and commits | ✅ Confirmed |
 | D-009 | Use aggregation pipelines, selective indexes, bulk upserts, schema validation, and query-plan analysis | ✅ Confirmed |
-| D-010 | Use FastAPI as the API framework and keep it confined to the transport layer | ✅ Confirmed |
-| D-011 | Use PyMongo directly instead of an ODM | ✅ Confirmed |
-| D-012 | Run bounded repository synchronization synchronously in the MVP API request | ✅ Confirmed |
+| D-013 | Use resource-level updated-at checkpoints and idempotent replay-safe synchronization | ✅ Confirmed |
+| D-014 | Use authenticated serial GitHub requests with bounded retry/backoff and rate-limit awareness | ✅ Confirmed |
+| D-015 | Use GitHub REST API for the MVP and defer GraphQL | ✅ Confirmed |
 
 ---
 
@@ -1668,17 +1673,18 @@ The design should preserve the current MVP constraint that synchronization runs 
 
 ---
 
-### 2026-09-17
+### 2026-09-19
 
-- Q-005 resolved: FastAPI selected as the HTTP API framework.
-- FastAPI is explicitly limited to the API/transport layer.
-- Q-006 resolved: direct PyMongo usage selected instead of an ODM.
-- The async PyMongo API is preferred so database access fits the asynchronous backend model.
-- Q-007 resolved: repository synchronization will run synchronously inside the API request for the MVP.
-- Synchronization volume will be bounded by configurable limits.
-- Only one synchronization may run per repository at a time.
-- Synchronization logic will remain in an application service so it can later be moved to a background worker without redesigning the core logic.
-- Next task changed to Q-008: define incremental synchronization and checkpoint semantics.
+- Q-008 resolved: incremental synchronization uses independent resource-level update-time checkpoints.
+- Checkpoints advance only after successful resource synchronization.
+- Sync writes are idempotent upserts; interrupted runs safely replay from the previous checkpoint.
+- Updated pull requests trigger refresh of embedded `reviews[]` and `commits[]`.
+- Q-009 resolved: GitHub API access will be authenticated and serial in the MVP.
+- Rate-limit headers are monitored; bounded exponential backoff and finite retry budgets are used.
+- Conditional requests may be used where they provide concrete benefit.
+- Q-010 resolved: GitHub REST API selected for the MVP.
+- GraphQL deferred as a later comparison/optimization exercise.
+- Next task changed to Q-011: decide authentication for the application's own API.
 
 ## 18. Project Completion Definition
 
