@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Select the Python web framework for the API layer.
+**Next step:** Define the testing strategy, including unit, integration, API, and external-client tests.
 
 ---
 
@@ -238,6 +238,33 @@ The project should demonstrate MongoDB depth through features that solve real pr
 
 ---
 
+
+### D-010 — FastAPI Framework
+
+**Decision:** Use FastAPI as the HTTP API framework.
+
+FastAPI is restricted to the transport layer. Application, synchronization, analytics, and persistence logic must remain framework-independent.
+
+---
+
+### D-011 — Direct PyMongo Usage
+
+**Decision:** Use the official PyMongo driver directly, preferably through its asynchronous API.
+
+Do not use an ODM in the MVP. MongoDB-specific behavior should remain explicit, while PyMongo access is isolated behind repository/data-access abstractions.
+
+---
+
+### D-012 — Synchronous MVP Synchronization
+
+**Decision:** Repository synchronization runs synchronously inside the API request in the MVP.
+
+Synchronization is bounded by configurable import limits and only one sync may run per repository at a time.
+
+The synchronization service must remain independent from FastAPI so the same logic can later be executed by a background worker.
+
+---
+
 ### D-013 — Incremental Synchronization Strategy
 
 **Decision:** Use independent resource-level `updated_at` checkpoints for pull requests and issues. Writes are idempotent upserts, and checkpoints advance only after a complete successful resource synchronization.
@@ -257,6 +284,30 @@ Interrupted runs safely replay data from the previous successful checkpoint inst
 **Decision:** Use GitHub REST API for the MVP.
 
 GraphQL is deferred as a later comparison or optimization exercise rather than included in the initial implementation.
+
+---
+
+### D-016 — Application API Authentication
+
+**Decision:** The MVP will not implement user accounts or JWT authentication.
+
+Local development may run without authentication. Public deployments should protect write and synchronization endpoints with a simple API key supplied through configuration, while read-only analytics endpoints may remain public.
+
+---
+
+### D-017 — Typed Configuration and Secret Management
+
+**Decision:** Use `pydantic-settings` for centralized typed configuration.
+
+Configuration is supplied through environment variables. Local development may use `.env`; `.env.example` is committed for documentation. GitHub tokens, API keys, and credential-bearing MongoDB URIs must never be committed.
+
+---
+
+
+
+---
+
+---
 
 ---
 
@@ -298,7 +349,7 @@ The MVP will implement the following seven analytics areas:
    Time from issue creation to closure.
 
 7. **Repository activity trends over time**  
-   Weekly/monthly trends for commits, pull requests, and issues.
+   Weekly/monthly trends for pull requests and issues.
 
 **Decision:** These seven metrics are sufficient for the MVP.
 
@@ -742,72 +793,133 @@ Window functions may become useful later for rolling averages, smoothing, or mor
 
 ### Q-005 — Which Python web framework should be used?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Primary candidate:
+**Decision:** Use FastAPI as the HTTP API framework.
 
-- FastAPI
+**Rationale:**
 
-Alternatives:
+FastAPI fits the project because it provides:
 
-- Flask
-- Django / Django REST Framework
+- strong integration with Python type hints,
+- native asynchronous request handling,
+- automatic OpenAPI documentation,
+- lightweight API-centric architecture,
+- good testability,
+- minimal framework overhead compared with a full-stack framework.
 
-Likely direction: FastAPI because the project is API-centric and should demonstrate modern Python typing and asynchronous I/O.
+FastAPI will be limited to the API / transport layer.
 
-**Decision:** _To be confirmed._
+Business logic, synchronization, persistence, and analytics logic must remain independent from FastAPI.
+
+Target layering:
+
+```text
+FastAPI
+   |
+   v
+Application / Service layer
+   |
+   +---------> GitHub client
+   |
+   +---------> Repository layer
+   |                |
+   |                v
+   |             MongoDB
+   |
+   +---------> Analytics layer
+```
+
+This keeps the framework replaceable and prevents HTTP concerns from leaking into domain or persistence logic.
 
 ---
 
 ### Q-006 — Which MongoDB Python driver / abstraction layer should be used?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidates:
+**Decision:** Use the official PyMongo driver directly instead of an ODM.
 
-- PyMongo
-- PyMongo Async API
-- ODMantic
-- Beanie
-- MongoEngine
+Prefer the asynchronous PyMongo API so MongoDB access integrates naturally with FastAPI and other async I/O.
 
-Key decision:
+**Rationale:**
 
-Should the project demonstrate MongoDB directly through the official driver, or use an ODM?
+MongoDB itself is a core technology being demonstrated by this project. Using PyMongo directly keeps the following concepts explicit and visible:
 
-Possible preference for portfolio value: retain enough direct MongoDB interaction that document modeling, indexes, and aggregation pipelines remain visible.
+- collections,
+- document shapes,
+- indexes,
+- aggregation pipelines,
+- bulk writes,
+- upserts,
+- schema validation,
+- query-plan analysis with `explain()`.
 
-**Decision:** _To be determined._
+An ODM such as Beanie, ODMantic, or MongoEngine would hide part of the MongoDB-specific design that the project is intended to demonstrate.
+
+Persistence details must still be isolated behind a repository/data-access layer so application services do not depend directly on PyMongo.
+
+Target dependency direction:
+
+```text
+FastAPI
+  |
+Service layer
+  |
+Repository layer
+  |
+PyMongo
+  |
+MongoDB
+```
+
+An ODM should only be introduced later if a concrete maintainability problem justifies it.
 
 ---
 
 ### Q-007 — Sync architecture: synchronous request, background job, or both?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Potential model:
+**Decision:** The MVP will execute repository synchronization synchronously within the API request.
+
+Example flow:
 
 ```text
-POST /repositories
+POST /repositories/{id}/sync
         |
         v
-Register repository
+RepositorySyncService
+        |
+        +--> GitHub API
+        |
+        +--> MongoDB bulk upserts
         |
         v
-Background synchronization job
-        |
-        v
-GitHub API -> MongoDB
+HTTP response with sync summary
 ```
 
-Questions:
+**Constraints:**
 
-- Should imports happen asynchronously?
-- Should an API request start an import and return a job ID?
-- Do we need a job/status collection?
-- What scheduler should later run incremental updates?
+- Synchronization volume must be deliberately bounded.
+- Import limits must be configurable.
+- A repository must not have multiple concurrent synchronization processes.
+- The synchronization service must be independent from FastAPI.
+- The implementation must remain easy to move to a background worker later.
 
-**Decision:** _To be determined._
+Initial working limits are approximately:
+
+- up to 500 pull requests,
+- up to 500 issues,
+- associated reviews and commits required by those pull requests.
+
+Exact limits may be adjusted after measuring GitHub API behavior and request duration.
+
+**Rationale:**
+
+A synchronous request keeps the MVP architecture simple and avoids introducing queues, workers, schedulers, and job orchestration before they solve a real problem.
+
+At the same time, synchronization logic remains in an application service rather than the endpoint itself so it can later be invoked by a background worker without redesigning the core logic.
 
 ---
 
@@ -966,40 +1078,122 @@ This comparison may become a useful portfolio extension because it demonstrates 
 
 ### Q-011 — Authentication model for the application API
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Possible MVP choices:
+**Decision:** The MVP will not implement user accounts, JWT-based authentication, or a full authorization subsystem.
 
-- No authentication for local/demo use
-- API key
-- JWT authentication
+#### Local development
 
-Authentication should only be added if it demonstrates useful backend engineering without distracting from the main project goals.
+Local development and automated tests may run without application-level authentication.
 
-**Decision:** _To be determined._
+#### Public deployment
+
+If the application is deployed publicly:
+
+- write and synchronization endpoints must be protected with a simple API key,
+- read-only analytics endpoints may remain public,
+- the API key is supplied through configuration and never committed to version control.
+
+Examples of protected endpoints:
+
+```text
+POST /repositories
+POST /repositories/{id}/sync
+```
+
+Examples of potentially public endpoints:
+
+```text
+GET /repositories
+GET /repositories/{id}
+GET /repositories/{id}/analytics/...
+```
+
+**Rationale:**
+
+Full user authentication would add substantial implementation scope without contributing meaningfully to the project's primary goals of demonstrating Python, MongoDB, backend architecture, synchronization, and analytics.
+
+**Decision summary:** No user/JWT authentication in the MVP. Use optional API-key protection for write/sync endpoints in public deployments.
 
 ---
 
 ### Q-012 — Configuration and secrets
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Expected configuration:
+**Decision:** Use `pydantic-settings` as the centralized, typed configuration layer.
 
-- MongoDB URI
-- GitHub token
-- Database name
-- Import limits
-- Logging level
+Configuration is provided through environment variables. Local development may use a `.env` file. The repository will contain a `.env.example` file documenting supported configuration values without secrets.
 
-Likely mechanisms:
+Example settings:
 
-- Environment variables
-- `.env` for local development
-- `.env.example` committed to Git
-- Secrets excluded from Git
+```python
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-**Decision:** _To be confirmed._
+class Settings(BaseSettings):
+    mongodb_uri: str
+    mongodb_database: str = "github_analytics"
+    github_token: str
+    api_key: str | None = None
+    max_pull_requests: int = 500
+    max_issues: int = 500
+    github_retry_count: int = 4
+    log_level: str = "INFO"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+    )
+```
+
+Expected local configuration:
+
+```text
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DATABASE=github_analytics
+GITHUB_TOKEN=
+API_KEY=
+MAX_PULL_REQUESTS=500
+MAX_ISSUES=500
+GITHUB_RETRY_COUNT=4
+LOG_LEVEL=INFO
+```
+
+#### Secrets
+
+Treat the following as secrets:
+
+- `GITHUB_TOKEN`
+- `API_KEY`
+- credential-bearing `MONGODB_URI`
+
+These values must never be committed to version control.
+
+#### Non-secret configuration
+
+Examples:
+
+- `MONGODB_DATABASE`
+- `MAX_PULL_REQUESTS`
+- `MAX_ISSUES`
+- `GITHUB_RETRY_COUNT`
+- `LOG_LEVEL`
+
+#### Application access
+
+Application code must access configuration through the centralized `Settings` abstraction. Direct environment access such as `os.getenv("GITHUB_TOKEN")` should not be scattered across the codebase.
+
+A cached settings provider may be used:
+
+```python
+from functools import lru_cache
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+**Decision summary:** Typed centralized configuration via `pydantic-settings`, environment variables in all environments, optional `.env` locally, `.env.example` committed, and no secrets in version control.
 
 ---
 
@@ -1250,16 +1444,16 @@ Legend:
 ### Phase 1 — Architecture and Data Model
 
 - ✅ Select GitHub REST API for the MVP
-- ⬜ Select Python framework
-- ⬜ Select MongoDB driver / ODM
+- ✅ Select FastAPI as Python framework
+- ✅ Select direct PyMongo usage
 - ✅ Define domain model
 - ✅ Define MongoDB collections
 - ✅ Decide embedding vs. referencing
 - ✅ Define initial indexes
-- ⬜ Define synchronization architecture
-- ⬜ Define error handling strategy
+- ✅ Define synchronous MVP synchronization architecture
+- 🟡 Define error handling strategy
 - ✅ Define idempotency strategy
-- ⬜ Define configuration model
+- ✅ Define configuration model
 - ⬜ Create architecture documentation
 
 Deliverable:
@@ -1274,15 +1468,15 @@ docs/architecture.md
 
 - ⬜ Initialize Python project
 - ⬜ Add dependency management
-- ⬜ Add FastAPI or selected framework
+- ⬜ Add FastAPI
 - ⬜ Add MongoDB connection
-- ⬜ Add application configuration
+- ⬜ Add `pydantic-settings` configuration
 - ⬜ Add structured logging
 - ⬜ Add health endpoint
 - ⬜ Add test infrastructure
 - ⬜ Add linting/type checking
 - ⬜ Add Docker Compose for MongoDB
-- ⬜ Add `.env.example`
+- ⬜ Add `.env.example` and `.gitignore` secret rules
 
 ---
 
@@ -1582,27 +1776,24 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Decide application API authentication
+### NEXT: Define the testing strategy
 
-Resolve **Q-011**:
+Resolve **Q-013**:
 
-> Does the application's own FastAPI API need authentication in the MVP?
+> What testing layers should the project include?
 
-Possible choices:
+The decision should cover:
 
-- no authentication for local/demo use,
-- simple API key,
-- JWT-based authentication.
+- unit tests for application/service logic,
+- repository/data-access integration tests,
+- FastAPI endpoint tests,
+- GitHub client tests with mocked HTTP responses,
+- failure-path tests,
+- whether MongoDB integration tests should use Docker or Testcontainers,
+- whether end-to-end tests are needed in the MVP,
+- how much code coverage is useful without turning coverage into a vanity metric.
 
-The decision should consider:
-
-- portfolio value,
-- implementation complexity,
-- whether authentication contributes to the core learning goals,
-- whether the application will be deployed publicly,
-- whether protecting GitHub synchronization endpoints is necessary in the MVP.
-
-Authentication should only be included if it adds meaningful backend engineering value without distracting from the Python + MongoDB focus.
+The goal is to demonstrate realistic backend testing while keeping the test architecture maintainable.
 
 ---
 
@@ -1619,9 +1810,14 @@ Authentication should only be included if it adds meaningful backend engineering
 | D-007 | Embed PR commits and avoid a separate commits collection in the MVP | ✅ Confirmed |
 | D-008 | Use four top-level collections with embedded PR reviews and commits | ✅ Confirmed |
 | D-009 | Use aggregation pipelines, selective indexes, bulk upserts, schema validation, and query-plan analysis | ✅ Confirmed |
+| D-010 | Use FastAPI as the API framework and keep it confined to the transport layer | ✅ Confirmed |
+| D-011 | Use PyMongo directly instead of an ODM | ✅ Confirmed |
+| D-012 | Run bounded repository synchronization synchronously in the MVP API request | ✅ Confirmed |
 | D-013 | Use resource-level updated-at checkpoints and idempotent replay-safe synchronization | ✅ Confirmed |
 | D-014 | Use authenticated serial GitHub requests with bounded retry/backoff and rate-limit awareness | ✅ Confirmed |
 | D-015 | Use GitHub REST API for the MVP and defer GraphQL | ✅ Confirmed |
+| D-016 | No JWT/user authentication in MVP; optional API-key protection for public write/sync endpoints | ✅ Confirmed |
+| D-017 | Use pydantic-settings with environment variables, local .env, and committed .env.example | ✅ Confirmed |
 
 ---
 
@@ -1673,6 +1869,20 @@ Authentication should only be included if it adds meaningful backend engineering
 
 ---
 
+### 2026-09-17
+
+- Q-005 resolved: FastAPI selected as the HTTP API framework.
+- FastAPI is explicitly limited to the API/transport layer.
+- Q-006 resolved: direct PyMongo usage selected instead of an ODM.
+- The async PyMongo API is preferred so database access fits the asynchronous backend model.
+- Q-007 resolved: repository synchronization will run synchronously inside the API request for the MVP.
+- Synchronization volume will be bounded by configurable limits.
+- Only one synchronization may run per repository at a time.
+- Synchronization logic will remain in an application service so it can later be moved to a background worker without redesigning the core logic.
+- Next task changed to Q-008: define incremental synchronization and checkpoint semantics.
+
+---
+
 ### 2026-09-19
 
 - Q-008 resolved: incremental synchronization uses independent resource-level update-time checkpoints.
@@ -1685,6 +1895,19 @@ Authentication should only be included if it adds meaningful backend engineering
 - Q-010 resolved: GitHub REST API selected for the MVP.
 - GraphQL deferred as a later comparison/optimization exercise.
 - Next task changed to Q-011: decide authentication for the application's own API.
+
+### 2026-09-23
+
+- Q-011 resolved: no user/JWT authentication in the MVP.
+- Local development may run without authentication.
+- Public deployments will protect write/synchronization endpoints with a simple API key if needed.
+- Q-012 resolved: `pydantic-settings` selected for centralized typed configuration.
+- Environment variables are the canonical configuration source.
+- Local `.env` files are allowed but excluded from version control.
+- `.env.example` will document supported configuration values without secrets.
+- GitHub tokens, API keys, and credential-bearing MongoDB URIs are treated as secrets.
+- Next task changed to Q-013: define the testing strategy.
+
 
 ## 18. Project Completion Definition
 
