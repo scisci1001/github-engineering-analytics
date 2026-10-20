@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Define the testing strategy, including unit, integration, API, and external-client tests.
+**Next step:** Define the local development environment.
 
 ---
 
@@ -300,6 +300,14 @@ Local development may run without authentication. Public deployments should prot
 **Decision:** Use `pydantic-settings` for centralized typed configuration.
 
 Configuration is supplied through environment variables. Local development may use `.env`; `.env.example` is committed for documentation. GitHub tokens, API keys, and credential-bearing MongoDB URIs must never be committed.
+
+---
+
+### D-018 — Layered Testing Strategy
+
+**Decision:** Use layered testing with unit tests, GitHub-client tests using mocked HTTP transport, real MongoDB integration tests through Testcontainers, FastAPI API tests, explicit failure-path tests, and a small number of end-to-end smoke tests.
+
+Target approximately 80% overall code coverage as a guideline, with priority given to critical business logic and failure scenarios rather than maximizing the percentage.
 
 ---
 
@@ -1199,25 +1207,130 @@ def get_settings() -> Settings:
 
 ### Q-013 — Testing strategy
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidates:
+**Decision:** Use a layered testing strategy with unit, GitHub-client, MongoDB integration, FastAPI API, failure-path, and limited end-to-end tests.
 
-- Unit tests
-- Repository/data-access tests
-- Integration tests against MongoDB
-- API tests
-- GitHub API client tests using mocked HTTP responses
-- End-to-end tests
-- Testcontainers
+#### Unit tests
 
-Questions:
+Use unit tests for application/service logic.
 
-- Use Docker MongoDB for integration tests?
-- Use Testcontainers?
-- What coverage target is meaningful?
+Unit tests should:
 
-**Decision:** _To be determined._
+- avoid real MongoDB,
+- avoid real GitHub API calls,
+- mock repository/data-access abstractions where appropriate,
+- mock the `GitHubClient` at the service boundary,
+- focus on business rules and synchronization behavior.
+
+#### GitHub client tests
+
+Test the GitHub client using mocked HTTP responses at the transport boundary.
+
+These tests should cover:
+
+- response parsing,
+- pagination,
+- rate-limit headers,
+- retry/backoff behavior,
+- error mapping,
+- malformed or unexpected responses,
+- retry exhaustion.
+
+The GitHub API itself must not be called during automated tests.
+
+#### MongoDB integration tests
+
+MongoDB-specific behavior must be tested against a real MongoDB instance rather than a MongoDB mock.
+
+Use **Testcontainers** to start an isolated MongoDB container for integration tests.
+
+Integration tests should cover:
+
+- indexes,
+- unique constraints,
+- schema validation,
+- aggregation pipelines,
+- bulk writes,
+- upserts,
+- multikey behavior,
+- idempotent persistence.
+
+A mock such as `mongomock` is not sufficient for these tests because the project intentionally demonstrates real MongoDB behavior.
+
+#### FastAPI API tests
+
+Use API tests to verify:
+
+- routing,
+- request validation,
+- response models,
+- HTTP status codes,
+- dependency wiring,
+- API-key behavior where enabled,
+- error responses.
+
+#### Failure-path tests
+
+Failure scenarios are first-class test cases.
+
+Important cases include:
+
+- interrupted synchronization,
+- GitHub 5xx responses,
+- GitHub rate-limit exhaustion,
+- retry exhaustion,
+- repeated imports,
+- duplicate prevention,
+- checkpoint advancement only after successful synchronization,
+- refresh of embedded reviews and commits,
+- invalid API input.
+
+#### End-to-end tests
+
+Include only a small number of end-to-end smoke tests.
+
+The MVP does not need a large E2E suite.
+
+#### Coverage
+
+Target approximately **80% overall code coverage** as a useful quality signal.
+
+Coverage is not an absolute objective. Critical business logic and failure paths are more important than maximizing the percentage.
+
+Coverage should be measured in CI.
+
+#### Planned testing tools
+
+Expected tools include:
+
+- `pytest`
+- `pytest-asyncio`
+- `pytest-cov`
+- Testcontainers for Python
+- an HTTP mocking library compatible with the selected GitHub HTTP client
+
+The exact HTTP client and mocking library will be selected during implementation.
+
+#### Proposed test structure
+
+```text
+tests/
+├── unit/
+│   ├── services/
+│   └── analytics/
+├── integration/
+│   ├── persistence/
+│   └── mongodb/
+├── api/
+│   └── test_repositories.py
+├── github/
+│   └── test_client.py
+└── e2e/
+    └── test_sync_smoke.py
+```
+
+**Decision summary:** Use layered tests, real MongoDB through Testcontainers for integration testing, mocked GitHub HTTP transport, explicit failure-path coverage, limited E2E smoke tests, and approximately 80% overall coverage as a guideline rather than a hard target.
 
 ---
 
@@ -1776,24 +1889,23 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Define the testing strategy
+### NEXT: Define the local development environment
 
-Resolve **Q-013**:
+Resolve **Q-014**:
 
-> What testing layers should the project include?
+> How should the application run locally during development?
 
 The decision should cover:
 
-- unit tests for application/service logic,
-- repository/data-access integration tests,
-- FastAPI endpoint tests,
-- GitHub client tests with mocked HTTP responses,
-- failure-path tests,
-- whether MongoDB integration tests should use Docker or Testcontainers,
-- whether end-to-end tests are needed in the MVP,
-- how much code coverage is useful without turning coverage into a vanity metric.
+- Python virtual environment,
+- local FastAPI execution,
+- Docker Compose,
+- MongoDB container,
+- whether the application itself should initially run inside or outside Docker,
+- whether a MongoDB GUI such as Mongo Express is useful,
+- how Testcontainers fits alongside the normal development MongoDB instance.
 
-The goal is to demonstrate realistic backend testing while keeping the test architecture maintainable.
+The goal is to keep day-to-day development simple while ensuring the environment is reproducible.
 
 ---
 
@@ -1818,6 +1930,7 @@ The goal is to demonstrate realistic backend testing while keeping the test arch
 | D-015 | Use GitHub REST API for the MVP and defer GraphQL | ✅ Confirmed |
 | D-016 | No JWT/user authentication in MVP; optional API-key protection for public write/sync endpoints | ✅ Confirmed |
 | D-017 | Use pydantic-settings with environment variables, local .env, and committed .env.example | ✅ Confirmed |
+| D-018 | Use layered testing with Testcontainers-based real MongoDB integration tests and mocked GitHub HTTP transport | ✅ Confirmed |
 
 ---
 
@@ -1908,6 +2021,19 @@ The goal is to demonstrate realistic backend testing while keeping the test arch
 - GitHub tokens, API keys, and credential-bearing MongoDB URIs are treated as secrets.
 - Next task changed to Q-013: define the testing strategy.
 
+
+### 2026-10-21
+
+- Q-013 resolved: layered testing strategy selected.
+- Unit tests will cover application/service logic without real external systems.
+- GitHub client tests will mock the HTTP transport rather than call GitHub.
+- MongoDB integration tests will use a real MongoDB instance through Testcontainers.
+- FastAPI endpoint tests and explicit failure-path tests are required.
+- Only a small number of end-to-end smoke tests are planned for the MVP.
+- Approximately 80% overall code coverage is a guideline, not a hard target.
+- Next task changed to Q-014: define the local development environment.
+
+---
 
 ## 18. Project Completion Definition
 
