@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Define the local development environment.
+**Next step:** Select the Python packaging and dependency-management approach.
 
 ---
 
@@ -316,6 +316,14 @@ Target approximately 80% overall code coverage as a guideline, with priority giv
 ---
 
 ---
+
+---
+
+### D-019 — Local Development Environment
+
+**Decision:** Run FastAPI directly on the developer host in an isolated Python environment and run MongoDB through Docker Compose with a persistent development volume.
+
+Integration tests use a separate Testcontainers-managed MongoDB instance. Mongo Express is optional. Containerizing the application itself is deferred until the application is stable.
 
 ---
 
@@ -1336,17 +1344,99 @@ tests/
 
 ### Q-014 — Local development environment
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Likely setup:
+**Decision:** Run the Python/FastAPI application directly on the developer host inside an isolated Python environment, while MongoDB runs in Docker Compose.
 
-- Python virtual environment
-- Docker Compose
-- MongoDB container
-- Application container later
-- Optional Mongo Express or another database UI
+Target development setup:
 
-**Decision:** _To be determined._
+```text
+Host machine
+├── Python virtual environment
+├── FastAPI application
+├── IDE / debugger
+└── Docker Compose
+    └── MongoDB
+```
+
+#### FastAPI application
+
+During normal development, run the application directly on the host rather than inside Docker.
+
+Example:
+
+```text
+uvicorn github_analytics.main:app --reload
+```
+
+This keeps the development and debugging cycle fast and IDE-friendly.
+
+#### MongoDB
+
+Run MongoDB through Docker Compose with a persistent development volume.
+
+Initial example:
+
+```yaml
+services:
+  mongodb:
+    image: mongo:8
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+```
+
+The exact MongoDB image should later be pinned to a concrete version for reproducibility.
+
+#### Python environment
+
+Use an isolated Python environment for all project dependencies.
+
+The exact package/dependency manager (`uv`, Poetry, or pip-based tooling) will be decided in Q-015.
+
+#### MongoDB GUI
+
+Mongo Express is optional and is not part of the default development stack.
+
+A separate desktop tool such as MongoDB Compass may be used when visual inspection is useful.
+
+#### Integration tests
+
+Integration tests must not reuse the normal development MongoDB instance.
+
+They will start their own isolated MongoDB instance through Testcontainers.
+
+Therefore:
+
+```text
+Development MongoDB
+    !=
+Integration-test MongoDB
+```
+
+This keeps tests reproducible and prevents test data from affecting the developer database.
+
+#### Application containerization
+
+Containerizing the FastAPI application itself is deferred until the application is sufficiently stable.
+
+Initial development:
+
+```text
+FastAPI -> host
+MongoDB -> Docker
+```
+
+Later:
+
+```text
+Docker Compose
+├── application
+└── mongodb
+```
+
+**Decision summary:** Host-run FastAPI, Docker Compose MongoDB with persistent volume, Testcontainers for isolated integration-test MongoDB, optional MongoDB GUI, and deferred application containerization.
 
 ---
 
@@ -1579,7 +1669,7 @@ docs/architecture.md
 
 ### Phase 2 — Project Skeleton
 
-- ⬜ Initialize Python project
+- ⬜ Initialize Python project with isolated environment
 - ⬜ Add dependency management
 - ⬜ Add FastAPI
 - ⬜ Add MongoDB connection
@@ -1588,7 +1678,7 @@ docs/architecture.md
 - ⬜ Add health endpoint
 - ⬜ Add test infrastructure
 - ⬜ Add linting/type checking
-- ⬜ Add Docker Compose for MongoDB
+- ⬜ Add Docker Compose for MongoDB development instance
 - ⬜ Add `.env.example` and `.gitignore` secret rules
 
 ---
@@ -1889,23 +1979,30 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Define the local development environment
+### NEXT: Select packaging and dependency management
 
-Resolve **Q-014**:
+Resolve **Q-015**:
 
-> How should the application run locally during development?
+> Which Python packaging and dependency-management approach should the project use?
 
-The decision should cover:
+Candidates:
 
-- Python virtual environment,
-- local FastAPI execution,
-- Docker Compose,
-- MongoDB container,
-- whether the application itself should initially run inside or outside Docker,
-- whether a MongoDB GUI such as Mongo Express is useful,
-- how Testcontainers fits alongside the normal development MongoDB instance.
+- `uv`
+- Poetry
+- pip + requirements files
 
-The goal is to keep day-to-day development simple while ensuring the environment is reproducible.
+The decision should consider:
+
+- speed,
+- reproducibility,
+- lockfile support,
+- virtual-environment management,
+- `pyproject.toml` support,
+- CI simplicity,
+- developer ergonomics,
+- portfolio relevance.
+
+The current likely direction is `uv`, but the decision should be confirmed explicitly.
 
 ---
 
@@ -1931,6 +2028,7 @@ The goal is to keep day-to-day development simple while ensuring the environment
 | D-016 | No JWT/user authentication in MVP; optional API-key protection for public write/sync endpoints | ✅ Confirmed |
 | D-017 | Use pydantic-settings with environment variables, local .env, and committed .env.example | ✅ Confirmed |
 | D-018 | Use layered testing with Testcontainers-based real MongoDB integration tests and mocked GitHub HTTP transport | ✅ Confirmed |
+| D-019 | Run FastAPI on the host, MongoDB in Docker Compose, and integration-test MongoDB via Testcontainers | ✅ Confirmed |
 
 ---
 
@@ -2032,6 +2130,18 @@ The goal is to keep day-to-day development simple while ensuring the environment
 - Only a small number of end-to-end smoke tests are planned for the MVP.
 - Approximately 80% overall code coverage is a guideline, not a hard target.
 - Next task changed to Q-014: define the local development environment.
+
+---
+
+### 2026-10-29
+
+- Q-014 resolved: local development environment defined.
+- FastAPI will run directly on the developer host inside an isolated Python environment.
+- MongoDB will run through Docker Compose with a persistent development volume.
+- Integration tests will use a separate Testcontainers-managed MongoDB instance.
+- Mongo Express is optional and not part of the default stack.
+- Containerizing the FastAPI application itself is deferred until the application is sufficiently stable.
+- Next task changed to Q-015: select packaging and dependency management.
 
 ---
 
