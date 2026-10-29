@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Define the CI/CD pipeline and GitHub Actions workflow.
+**Next step:** Decide the deployment target and whether the portfolio MVP should be publicly hosted.
 
 ---
 
@@ -340,6 +340,32 @@ Dependencies are declared in `pyproject.toml`; `uv.lock` is committed for reprod
 **Decision:** Use Ruff for linting and formatting, mypy for static type checking, pytest for tests, and pre-commit for fast local quality checks.
 
 Black is intentionally omitted because Ruff formatter provides the formatting layer. The project's own code starts from a strict mypy posture, with only targeted exceptions for third-party typing limitations.
+
+---
+
+### D-022 — GitHub Actions CI
+
+**Decision:** Use GitHub Actions on pull requests and pushes to `main`, with parallel `quality` and `test` jobs.
+
+The quality job runs Ruff linting, Ruff formatting checks, and mypy. The test job runs the complete pytest suite, Testcontainers-based MongoDB integration tests, smoke tests, and coverage reporting.
+
+Docker image building and deployment are not part of the MVP CI pipeline.
+
+---
+
+### D-023 — MVP Observability
+
+**Decision:** Use structured logging, request/correlation IDs, synchronization lifecycle events, `/health`, `/ready`, operational sync measurements in logs, and centralized typed exception handling.
+
+Prometheus, Grafana, OpenTelemetry, and a dedicated metrics endpoint are deferred.
+
+---
+
+### D-024 — Backend-Only MVP
+
+**Decision:** The MVP is backend/API-only.
+
+FastAPI Swagger/OpenAPI documentation is the interactive interface. A separate frontend or analytics dashboard is deferred unless it later adds clear portfolio value.
 
 ---
 
@@ -1621,70 +1647,307 @@ Local pre-commit checks and CI checks must be complementary rather than duplicat
 
 ### Q-017 — CI/CD
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Likely CI platform:
+**Decision:** Use GitHub Actions for continuous integration on pull requests and pushes to `main`.
 
-- GitHub Actions
-
-Possible pipeline:
+The MVP CI pipeline will use two parallel jobs:
 
 ```text
 Push / Pull Request
         |
-        +--> lint
-        +--> type checking
-        +--> unit tests
-        +--> integration tests
-        +--> build Docker image
+        +--------------------+
+        |                    |
+        v                    v
+     QUALITY               TEST
 ```
 
-Deployment is optional for the first version.
+#### Triggers
 
-**Decision:** _To be determined._
+Run CI on:
+
+- pull requests,
+- pushes to `main`.
+
+#### Quality job
+
+The quality job should remain fast and should not require MongoDB.
+
+Planned steps:
+
+```text
+checkout
+setup uv / Python
+uv sync --locked
+ruff check
+ruff format --check
+mypy
+```
+
+Representative commands:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+```
+
+#### Test job
+
+The test job runs the complete automated test suite:
+
+- unit tests,
+- FastAPI API tests,
+- GitHub client tests,
+- MongoDB integration tests through Testcontainers,
+- limited end-to-end smoke tests,
+- coverage reporting.
+
+Representative command:
+
+```bash
+uv run pytest --cov=github_analytics --cov-report=term-missing
+```
+
+#### Job execution model
+
+Run `quality` and `test` in parallel rather than making one depend on the other.
+
+This provides faster and more complete feedback from a single workflow run.
+
+#### Python and dependency reproducibility
+
+Use the project's pinned Python version and committed `uv.lock`.
+
+CI installs dependencies with:
+
+```bash
+uv sync --locked
+```
+
+The project should use the official/recommended `uv` GitHub Actions setup.
+
+#### Coverage
+
+Coverage is reported in CI.
+
+The approximately 80% target remains a guideline and is not initially enforced with a hard `--cov-fail-under` threshold.
+
+Critical business logic and failure-path coverage remain more important than the raw percentage.
+
+#### Docker image build
+
+Do not build the application Docker image in the MVP CI pipeline.
+
+Application containerization remains deferred.
+
+#### Deployment
+
+The MVP CI workflow does not perform deployment.
+
+Deployment will be decided separately in Q-020.
+
+**Decision summary:** GitHub Actions runs parallel quality and test jobs on pull requests and pushes to `main`, using locked `uv` dependencies and the pinned Python version. Docker image build and deployment remain deferred.
 
 ---
 
 ### Q-018 — Observability
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Possible scope:
+**Decision:** Use structured application logging with request/correlation IDs, explicit synchronization lifecycle events, health/readiness endpoints, operational sync metrics in logs, and centralized exception handling.
 
-- Structured logging
-- Request IDs / correlation IDs
-- Import statistics
-- Sync duration
-- GitHub API request counts
-- Errors and retries
-- Health endpoint
-- Readiness endpoint
-- Metrics endpoint
+#### Structured logging
 
-Optional later:
+Operational logs should contain structured fields rather than relying only on free-form messages.
 
-- Prometheus
-- Grafana
-- OpenTelemetry
+Example:
 
-**Decision:** _To be determined._
+```json
+{
+  "event": "repository_sync_failed",
+  "repository": "spring-projects/spring-boot",
+  "resource": "pull_requests",
+  "request_id": "c91f...",
+  "processed_count": 183,
+  "retry_count": 3,
+  "duration_ms": 8241,
+  "error_type": "GitHubRateLimitError"
+}
+```
+
+#### Request / correlation ID
+
+Every incoming API request should have a request/correlation ID.
+
+Use an incoming `X-Request-ID` when appropriate or generate one when missing.
+
+The ID should propagate through:
+
+```text
+FastAPI request
+    |
+    v
+Application / Service layer
+    |
+    +--> GitHub client
+    |
+    +--> Persistence
+```
+
+and appear in related logs.
+
+#### Synchronization lifecycle events
+
+Important sync events include:
+
+- `sync_started`
+- `sync_completed`
+- `sync_failed`
+- `github_request_retry`
+- `github_rate_limit_hit`
+- `checkpoint_updated`
+
+Useful fields include:
+
+- repository ID/name,
+- resource,
+- processed count,
+- created count,
+- updated count,
+- duration,
+- retry count,
+- request ID.
+
+#### Health endpoint
+
+Provide:
+
+```text
+GET /health
+```
+
+This indicates that the application process is running.
+
+Example response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+#### Readiness endpoint
+
+Provide:
+
+```text
+GET /ready
+```
+
+Readiness should verify MongoDB connectivity.
+
+Do not call GitHub from the readiness check because GitHub is an external dependency and repeated readiness checks should not consume API capacity or create false application unavailability.
+
+#### Operational metrics
+
+Log useful operational values such as:
+
+- synchronization duration,
+- processed item counts,
+- GitHub request counts,
+- retry counts,
+- failure counts.
+
+These values may later become dedicated monitoring metrics.
+
+#### Exception handling
+
+Use typed application/domain exceptions and centralized FastAPI exception mapping.
+
+Examples:
+
+- `RepositoryNotFoundError`
+- `GitHubRateLimitError`
+- `GitHubApiError`
+- `SynchronizationAlreadyRunningError`
+- `SynchronizationFailedError`
+
+Avoid repeated broad `try/except` blocks in individual API endpoints.
+
+#### Deferred observability tooling
+
+The following are deferred until a concrete deployment/monitoring need exists:
+
+- Prometheus,
+- Grafana,
+- OpenTelemetry,
+- dedicated `/metrics` endpoint.
+
+**Decision summary:** Structured logging, correlation IDs, sync lifecycle logging, `/health`, `/ready`, operational values in logs, and centralized exception handling are part of the MVP. Full metrics/tracing stacks are deferred.
 
 ---
 
 ### Q-019 — Should the application have a UI?
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Options:
+**Decision:** The MVP will be backend/API-only.
 
-- Backend/API only
-- Swagger/OpenAPI UI only
-- Small dashboard
-- Separate frontend
+FastAPI's generated interactive API documentation will serve as the primary UI for development, demonstration, and manual exploration.
 
-Initial preference: backend-first. A frontend should only be added if it materially improves the portfolio demonstration.
+Expected interfaces:
 
-**Decision:** _To be determined._
+```text
+FastAPI backend
+├── REST API
+├── /docs      -> Swagger UI
+├── /redoc     -> ReDoc
+├── /health
+└── /ready
+```
+
+#### Rationale
+
+The project's primary goals are to demonstrate:
+
+- Python backend engineering,
+- MongoDB data modeling,
+- GitHub API integration,
+- synchronization,
+- analytics,
+- testing,
+- observability.
+
+A separate frontend would add implementation scope in a different technology area without materially improving the core backend demonstration.
+
+#### Portfolio presentation
+
+The README may include:
+
+- example API requests,
+- example analytics responses,
+- selected Swagger/OpenAPI screenshots,
+- architecture diagrams.
+
+#### Future dashboard
+
+A small analytics dashboard may be added later if it materially improves portfolio presentation.
+
+Possible future content:
+
+```text
+Repository selector
+        |
+        +--> PR lead time
+        +--> review time
+        +--> issue resolution
+        +--> contributor activity
+```
+
+A separate frontend is not part of the MVP.
+
+**Decision summary:** Backend/API-only MVP using FastAPI Swagger/OpenAPI documentation as the interactive interface. A standalone frontend/dashboard is deferred.
 
 ---
 
@@ -1823,8 +2086,8 @@ docs/architecture.md
 - ⬜ Add FastAPI
 - ⬜ Add MongoDB connection
 - ⬜ Add `pydantic-settings` configuration
-- ⬜ Add structured logging
-- ⬜ Add health endpoint
+- ⬜ Add structured logging and correlation IDs
+- ⬜ Add `/health` endpoint
 - ⬜ Add test infrastructure
 - ⬜ Add Ruff lint/format and mypy type checking
 - ⬜ Add Docker Compose for MongoDB development instance
@@ -1923,12 +2186,12 @@ docs/performance.md
 
 ### Phase 8 — CI and Project Quality
 
-- ⬜ Create GitHub Actions workflow
-- ⬜ Run linting in CI
-- ⬜ Run type checking in CI
+- ⬜ Create GitHub Actions quality/test workflow
+- ⬜ Run Ruff linting and formatting checks in CI
+- ⬜ Run mypy type checking in CI
 - ⬜ Run unit tests in CI
 - ⬜ Run MongoDB integration tests in CI
-- ⬜ Add coverage report
+- ⬜ Add CI coverage report
 - ⬜ Add pre-commit configuration for Ruff and mypy
 
 ---
@@ -2128,27 +2391,33 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Define CI/CD
+### NEXT: Decide deployment target
 
-Resolve **Q-017**:
+Resolve **Q-020**:
 
-> What should the GitHub Actions pipeline run, and on which events?
+> Should the portfolio MVP be publicly deployed, and if so, where?
 
-The decision should cover:
+Possible directions:
 
-- triggers such as push and pull request,
-- `uv` setup and dependency synchronization,
-- Ruff linting,
-- Ruff formatting check,
-- mypy type checking,
-- unit tests,
-- API/GitHub-client tests,
-- MongoDB integration tests with Testcontainers,
-- coverage reporting,
-- whether Docker image build should be part of the MVP pipeline,
-- whether deployment belongs in CI/CD now or should remain deferred.
+- local/Docker-only demonstration,
+- AWS,
+- Azure,
+- Render,
+- Railway,
+- Fly.io,
+- another suitable platform.
 
-The goal is to make the GitHub repository self-validating without introducing unnecessary deployment complexity.
+The decision should consider:
+
+- portfolio value of a live demo,
+- operating cost,
+- MongoDB hosting requirements,
+- secret management,
+- ease of deployment,
+- whether public write/sync endpoints require API-key protection,
+- whether deployment complexity distracts from the backend/MongoDB goals.
+
+Deployment is not required for the coding phase, but the final portfolio presentation may benefit from a live read-only API.
 
 ---
 
@@ -2177,6 +2446,9 @@ The goal is to make the GitHub repository self-validating without introducing un
 | D-019 | Run FastAPI on the host, MongoDB in Docker Compose, and integration-test MongoDB via Testcontainers | ✅ Confirmed |
 | D-020 | Use uv with pyproject.toml, committed uv.lock, local .venv, and separate runtime/dev dependencies | ✅ Confirmed |
 | D-021 | Use Ruff for lint/format, mypy for typing, pytest for tests, and pre-commit for local quality checks | ✅ Confirmed |
+| D-022 | Use GitHub Actions with parallel quality and test jobs; defer image build/deployment | ✅ Confirmed |
+| D-023 | Use structured logging, correlation IDs, health/readiness checks, and centralized exception handling | ✅ Confirmed |
+| D-024 | Keep the MVP backend/API-only and use FastAPI generated API documentation as the UI | ✅ Confirmed |
 
 ---
 
@@ -2315,6 +2587,23 @@ The goal is to make the GitHub repository self-validating without introducing un
 - pre-commit will run fast local checks such as Ruff and mypy.
 - Full unit, API, GitHub-client, integration, and coverage checks remain CI responsibilities.
 - Next task changed to Q-017: define CI/CD.
+
+---
+
+### 2026-10-29 — CI, observability, and UI decisions
+
+- Q-017 resolved: GitHub Actions selected for CI.
+- CI will run parallel `quality` and `test` jobs on pull requests and pushes to `main`.
+- Quality checks include Ruff linting, Ruff formatting validation, and mypy.
+- The test job runs the complete pytest suite, Testcontainers integration tests, and coverage reporting.
+- Docker image building and deployment remain outside the MVP CI pipeline.
+- Q-018 resolved: MVP observability defined.
+- Structured logging, request/correlation IDs, synchronization lifecycle events, `/health`, `/ready`, and centralized exception handling are included.
+- Prometheus, Grafana, OpenTelemetry, and a dedicated metrics endpoint are deferred.
+- Q-019 resolved: the MVP remains backend/API-only.
+- FastAPI Swagger/OpenAPI documentation will be the primary interactive interface.
+- A standalone frontend/dashboard is deferred.
+- Next task changed to Q-020: decide the deployment target.
 
 ---
 
