@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Decide whether and how AI capabilities should be added after the MVP.
+**Next step:** Begin implementation planning for the first coding phase.
 
 ---
 
@@ -376,6 +376,16 @@ FastAPI Swagger/OpenAPI documentation is the interactive interface. A separate f
 Cloud Run should scale to zero with a low maximum instance count. Read-only analytics and API documentation may be public, while write/synchronization endpoints remain API-key protected.
 
 The deployment is explicitly designed to remain within free-tier limits, with billing alerts and conservative resource constraints.
+
+---
+
+### D-026 — Post-MVP AI Extension
+
+**Decision:** After the core MVP is complete, add semantic search over GitHub issues and pull requests using an application-level `EmbeddingService` and MongoDB Vector Search.
+
+Issue/PR text is added to the stored model only when required by the AI use case. A later RAG layer may answer repository-engineering questions with explicit source references.
+
+LangChain and similar orchestration frameworks are intentionally deferred for the first implementation.
 
 ---
 
@@ -2071,22 +2081,139 @@ The chosen deployment target is Google Cloud Run because it provides a simple co
 
 ### Q-021 — Future AI extension
 
-**Status:** OPEN / FUTURE
+**Status:** DECIDED
 
-Potential extensions:
+**Decision:** After the core MVP is complete, add semantic search over GitHub issues and pull requests as the first AI extension.
 
-- Semantic issue search
-- Semantic pull request search
-- Issue classification
-- PR summarization
-- Repository knowledge assistant
-- Embeddings
-- RAG over repository engineering activity
-- Natural-language analytics
+The AI extension must remain outside the core MVP until the Python + MongoDB backend is complete and portfolio-ready.
 
-This is explicitly a future extension and should not complicate the MVP.
+#### Phase 1 — Semantic search
 
-**Decision:** _Deferred._
+Add semantic search over issue and pull request content.
+
+High-level flow:
+
+```text
+User query
+    |
+    v
+EmbeddingService
+    |
+    v
+MongoDB Vector Search
+    |
+    v
+Relevant issues / pull requests
+```
+
+The search should use embeddings and semantic similarity rather than relying only on keyword matching.
+
+#### Embedding abstraction
+
+Introduce an application-level abstraction such as:
+
+```python
+class EmbeddingService(Protocol):
+    async def embed(self, text: str) -> list[float]:
+        ...
+```
+
+This keeps the application independent from one concrete embedding provider.
+
+Possible implementations may later use:
+
+- a hosted embedding model,
+- Google Cloud / Vertex AI,
+- another external model provider,
+- a locally hosted embedding model.
+
+The concrete provider is intentionally not fixed at this design stage.
+
+#### MongoDB Vector Search
+
+Store and query embeddings through MongoDB Vector Search.
+
+The vector search layer should support repository-scoped semantic retrieval and may later combine vector similarity with metadata filters such as:
+
+- repository,
+- state,
+- date range,
+- resource type.
+
+#### Data-model evolution
+
+Extend stored GitHub content only where required by the AI use case.
+
+For example, issue and pull request text/body may need to be stored even though the analytics MVP does not require it.
+
+This is an intentional schema evolution driven by a new use case rather than speculative data collection.
+
+#### Phase 2 — RAG
+
+After semantic retrieval is working, optionally add a retrieval-augmented generation endpoint.
+
+High-level flow:
+
+```text
+Question
+   |
+   v
+Embedding
+   |
+   v
+MongoDB Vector Search
+   |
+   v
+Relevant issues / PRs
+   |
+   v
+Context construction
+   |
+   v
+LLM
+   |
+   v
+Answer with explicit source references
+```
+
+The RAG layer should answer repository-engineering questions using retrieved GitHub content and should preserve source attribution.
+
+#### Framework policy
+
+Do not introduce LangChain or another orchestration framework in the first AI implementation.
+
+Implement the following boundaries explicitly:
+
+- embedding generation,
+- vector retrieval,
+- context construction,
+- prompt construction,
+- LLM client,
+- source attribution.
+
+An orchestration framework may be evaluated later if it solves a concrete problem.
+
+#### Portfolio rationale
+
+This extension creates a clear progression:
+
+```text
+Python + MongoDB backend
+        ↓
+GitHub engineering analytics
+        ↓
+MongoDB aggregation
+        ↓
+Vector Search
+        ↓
+Semantic Search
+        ↓
+RAG
+```
+
+This strengthens the project's AI-engineering value without weakening its original senior-backend focus.
+
+**Decision summary:** The first post-MVP AI feature will be semantic search over issues and pull requests using an application-level `EmbeddingService` and MongoDB Vector Search. A RAG layer may be added later on top of the same retrieval architecture. LangChain is deferred.
 
 ---
 
@@ -2489,26 +2616,24 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Decide the future AI extension
+### NEXT: Start implementation planning
 
-Resolve **Q-021**:
+All current architecture/design questions through Q-021 are resolved.
 
-> Should the project include an AI-related extension after the core MVP is complete, and if so, which one?
+The next step is to turn the design into an implementation sequence.
 
-Potential directions:
+Start with the first coding milestone:
 
-- semantic issue search,
-- semantic pull request search,
-- issue classification,
-- pull request summarization,
-- repository knowledge assistant,
-- embeddings,
-- RAG over repository engineering activity,
-- natural-language analytics.
+1. initialize the Python project with `uv`,
+2. create the package/module structure,
+3. add FastAPI application bootstrap,
+4. add typed settings with `pydantic-settings`,
+5. configure Ruff, mypy, pytest, and pre-commit,
+6. add Docker Compose for local MongoDB,
+7. define MongoDB collections/index initialization,
+8. add the first repository API and persistence slice.
 
-The AI feature must remain outside the core MVP until the Python + MongoDB backend is complete and portfolio-ready.
-
-The decision should prioritize an extension that naturally builds on the collected GitHub data and strengthens the project's AI-engineering portfolio value without obscuring the core backend architecture.
+Implementation should continue incrementally, preserving the architectural boundaries defined in this document.
 
 ---
 
@@ -2541,6 +2666,7 @@ The decision should prioritize an extension that naturally builds on the collect
 | D-023 | Use structured logging, correlation IDs, health/readiness checks, and centralized exception handling | ✅ Confirmed |
 | D-024 | Keep the MVP backend/API-only and use FastAPI generated API documentation as the UI | ✅ Confirmed |
 | D-025 | Deploy publicly on Google Cloud Run with MongoDB Atlas Free and conservative free-tier cost controls | ✅ Confirmed |
+| D-026 | Add post-MVP semantic search with EmbeddingService and MongoDB Vector Search; defer RAG orchestration frameworks | ✅ Confirmed |
 
 ---
 
@@ -2711,6 +2837,20 @@ The decision should prioritize an extension that naturally builds on the collect
 - The deployment is designed to remain within commercial cloud free tiers and target 0 EUR operating cost.
 - Deployment automation remains deferred until application containerization and deployment configuration are stable.
 - Next task changed to Q-021: decide the future AI extension.
+
+---
+
+### 2026-10-29 — AI extension decision
+
+- Q-021 resolved: the first post-MVP AI feature will be semantic search over issues and pull requests.
+- Embedding generation will be isolated behind an application-level `EmbeddingService`.
+- MongoDB Vector Search will provide semantic retrieval.
+- Issue/PR text will be stored only when the AI use case requires it.
+- A later RAG layer may answer repository-engineering questions using retrieved GitHub sources.
+- Source attribution is required for RAG answers.
+- LangChain and similar orchestration frameworks are deferred for the first AI implementation.
+- All current design questions through Q-021 are now resolved.
+- Next task changed from architecture decisions to implementation planning.
 
 ---
 
