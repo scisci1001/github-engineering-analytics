@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Select the Python packaging and dependency-management approach.
+**Next step:** Select the code-quality tooling and formatting/type-checking strategy.
 
 ---
 
@@ -324,6 +324,14 @@ Target approximately 80% overall code coverage as a guideline, with priority giv
 **Decision:** Run FastAPI directly on the developer host in an isolated Python environment and run MongoDB through Docker Compose with a persistent development volume.
 
 Integration tests use a separate Testcontainers-managed MongoDB instance. Mongo Express is optional. Containerizing the application itself is deferred until the application is stable.
+
+---
+
+### D-020 — Python Project and Dependency Management
+
+**Decision:** Use `uv` for Python project, dependency, virtual-environment, and lockfile management.
+
+Dependencies are declared in `pyproject.toml`; `uv.lock` is committed for reproducibility; `.venv/` remains local and uncommitted. Runtime and development dependencies are managed separately.
 
 ---
 
@@ -1442,15 +1450,93 @@ Docker Compose
 
 ### Q-015 — Packaging and dependency management
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidates:
+**Decision:** Use `uv` for Python project management, dependency management, virtual-environment management, and lockfile generation.
 
-- `uv`
-- Poetry
-- pip + requirements files
+#### Project metadata and dependencies
 
-**Decision:** _To be determined._
+Declare project metadata and dependencies in:
+
+```text
+pyproject.toml
+```
+
+Use `uv` commands to manage dependencies rather than editing generated lock data manually.
+
+Examples:
+
+```bash
+uv add fastapi
+uv add pymongo
+uv add --dev pytest
+uv add --dev pytest-asyncio
+uv add --dev pytest-cov
+```
+
+#### Virtual environment
+
+Use the project-local virtual environment created/managed by `uv`:
+
+```text
+.venv/
+```
+
+The virtual environment is local development state and must not be committed.
+
+#### Lockfile
+
+Commit:
+
+```text
+uv.lock
+```
+
+to version control.
+
+This provides a reproducible dependency graph across developer machines and CI.
+
+#### Python version
+
+Use a project-level Python version declaration, for example:
+
+```text
+.python-version
+```
+
+The exact supported Python version will be selected during project initialization.
+
+#### Typical workflow
+
+```bash
+uv sync
+uv run uvicorn github_analytics.main:app --reload
+uv run pytest
+```
+
+#### Dependency groups
+
+Keep runtime and development dependencies separate.
+
+Examples of development-only dependencies include:
+
+- pytest
+- pytest-asyncio
+- pytest-cov
+- Testcontainers
+- Ruff
+- mypy
+- pre-commit
+
+The exact code-quality tool set will be decided in Q-016.
+
+#### Alternatives not selected
+
+Poetry and pip/requirements-based workflows are not used in the MVP.
+
+They remain valid Python tooling choices, but `uv` provides a simpler unified workflow for this application-oriented project.
+
+**Decision summary:** Use `uv`, `pyproject.toml`, committed `uv.lock`, a project-local `.venv`, and separate runtime/development dependencies.
 
 ---
 
@@ -1670,7 +1756,7 @@ docs/architecture.md
 ### Phase 2 — Project Skeleton
 
 - ⬜ Initialize Python project with isolated environment
-- ⬜ Add dependency management
+- ⬜ Add `uv` project/dependency management
 - ⬜ Add FastAPI
 - ⬜ Add MongoDB connection
 - ⬜ Add `pydantic-settings` configuration
@@ -1979,30 +2065,29 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Select packaging and dependency management
+### NEXT: Select code-quality tooling
 
-Resolve **Q-015**:
+Resolve **Q-016**:
 
-> Which Python packaging and dependency-management approach should the project use?
+> Which tools should enforce formatting, linting, type checking, and pre-commit quality checks?
 
-Candidates:
+Candidates include:
 
-- `uv`
-- Poetry
-- pip + requirements files
+- Ruff for linting,
+- Ruff formatter or Black for formatting,
+- mypy for static type checking,
+- pytest for testing,
+- pre-commit for local automated checks.
 
-The decision should consider:
+Key decisions:
 
-- speed,
-- reproducibility,
-- lockfile support,
-- virtual-environment management,
-- `pyproject.toml` support,
-- CI simplicity,
-- developer ergonomics,
-- portfolio relevance.
+- whether Ruff formatter replaces Black,
+- which Ruff rule groups should be enabled initially,
+- how strict mypy should be in the MVP,
+- which checks should run through pre-commit,
+- which checks must also run in CI.
 
-The current likely direction is `uv`, but the decision should be confirmed explicitly.
+The goal is a modern, maintainable toolchain without redundant tools.
 
 ---
 
@@ -2029,6 +2114,7 @@ The current likely direction is `uv`, but the decision should be confirmed expli
 | D-017 | Use pydantic-settings with environment variables, local .env, and committed .env.example | ✅ Confirmed |
 | D-018 | Use layered testing with Testcontainers-based real MongoDB integration tests and mocked GitHub HTTP transport | ✅ Confirmed |
 | D-019 | Run FastAPI on the host, MongoDB in Docker Compose, and integration-test MongoDB via Testcontainers | ✅ Confirmed |
+| D-020 | Use uv with pyproject.toml, committed uv.lock, local .venv, and separate runtime/dev dependencies | ✅ Confirmed |
 
 ---
 
@@ -2142,6 +2228,18 @@ The current likely direction is `uv`, but the decision should be confirmed expli
 - Mongo Express is optional and not part of the default stack.
 - Containerizing the FastAPI application itself is deferred until the application is sufficiently stable.
 - Next task changed to Q-015: select packaging and dependency management.
+
+---
+
+### 2026-10-29 — Packaging decision
+
+- Q-015 resolved: `uv` selected for Python project and dependency management.
+- Dependencies will be declared in `pyproject.toml`.
+- `uv.lock` will be committed for reproducible environments.
+- `.venv/` remains local and uncommitted.
+- Runtime and development dependencies will be managed separately.
+- Poetry and pip/requirements-based workflows are not used in the MVP.
+- Next task changed to Q-016: select code-quality tooling.
 
 ---
 
