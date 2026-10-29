@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Decide the deployment target and whether the portfolio MVP should be publicly hosted.
+**Next step:** Decide whether and how AI capabilities should be added after the MVP.
 
 ---
 
@@ -366,6 +366,16 @@ Prometheus, Grafana, OpenTelemetry, and a dedicated metrics endpoint are deferre
 **Decision:** The MVP is backend/API-only.
 
 FastAPI Swagger/OpenAPI documentation is the interactive interface. A separate frontend or analytics dashboard is deferred unless it later adds clear portfolio value.
+
+---
+
+### D-025 — Public Cloud Deployment
+
+**Decision:** Deploy the portfolio MVP on Google Cloud Run with a MongoDB Atlas Free cluster, preferably on GCP.
+
+Cloud Run should scale to zero with a low maximum instance count. Read-only analytics and API documentation may be public, while write/synchronization endpoints remain API-key protected.
+
+The deployment is explicitly designed to remain within free-tier limits, with billing alerts and conservative resource constraints.
 
 ---
 
@@ -1953,21 +1963,109 @@ A separate frontend is not part of the MVP.
 
 ### Q-020 — Deployment target
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Possibilities:
+**Decision:** Deploy the portfolio MVP publicly on Google Cloud Run and use a MongoDB Atlas Free cluster, preferably hosted on GCP.
 
-- Local Docker only
-- AWS
-- Azure
-- Render
-- Railway
-- Fly.io
-- Other
+Target deployment:
 
-Deployment is not required for the initial coding phase.
+```text
+Internet
+   |
+   v
+Google Cloud Run
+   |
+   |-- FastAPI
+   |-- Swagger/OpenAPI
+   |-- /health
+   |-- /ready
+   |
+   +----> GitHub REST API
+   |
+   +----> MongoDB Atlas Free cluster
+```
 
-**Decision:** _To be determined later._
+#### Cost objective
+
+The deployment must be designed to stay within the free tiers of commercial cloud providers.
+
+The project should use paid commercial cloud platforms, but the intended operating cost for the portfolio workload is:
+
+```text
+0 EUR
+```
+
+This is a target rather than an absolute guarantee because free-tier limits can be exceeded.
+
+#### Google Cloud Run
+
+Use Google Cloud Run for the FastAPI application.
+
+Recommended settings:
+
+```text
+min instances = 0
+max instances = 1
+```
+
+This allows scale-to-zero when unused and limits accidental cost growth.
+
+The Cloud Run request timeout may be configured high enough to support the current synchronous repository synchronization model.
+
+#### MongoDB Atlas
+
+Use a MongoDB Atlas Free cluster.
+
+Prefer a GCP-backed Atlas region when practical so the application and database remain on the same cloud provider and can be placed geographically close to each other.
+
+#### Public access model
+
+Read-only endpoints may be publicly accessible:
+
+```text
+GET /repositories
+GET /repositories/{id}
+GET /repositories/{id}/analytics/...
+GET /docs
+GET /redoc
+GET /health
+GET /ready
+```
+
+Write and synchronization endpoints remain protected with the configured API key:
+
+```text
+POST /repositories
+POST /repositories/{id}/sync
+```
+
+This allows LinkedIn/GitHub visitors to explore the live API without being able to trigger expensive operations.
+
+#### Cost controls
+
+Configure conservative operational safeguards:
+
+- Cloud Run scale-to-zero,
+- low maximum instance count,
+- billing/budget alerts,
+- resource limits,
+- no automatic paid scaling as an MVP objective.
+
+#### CI/CD relationship
+
+The current GitHub Actions pipeline remains CI-only.
+
+Deployment automation is not required immediately.
+
+A later implementation step may add an explicit deployment job once the application containerization and deployment configuration are stable.
+
+#### Alternative cloud providers
+
+Azure Container Apps and AWS remain valid alternatives, but are not selected for the MVP.
+
+The chosen deployment target is Google Cloud Run because it provides a simple container-based, scale-to-zero model that fits the current architecture and portfolio workload.
+
+**Decision summary:** Publicly deploy FastAPI on Google Cloud Run and use MongoDB Atlas Free, with scale-to-zero, conservative resource limits, public read-only endpoints, API-key-protected write/sync endpoints, and billing safeguards to target zero operating cost.
 
 ---
 
@@ -2204,7 +2302,7 @@ docs/performance.md
 - ⬜ Explain data model decisions
 - ⬜ Add example API calls
 - ⬜ Add example analytics output
-- ⬜ Add local setup instructions
+- ⬜ Add local and public deployment setup instructions
 - ⬜ Add sample screenshots if useful
 - ⬜ Document known limitations
 - ⬜ Add future roadmap
@@ -2228,7 +2326,7 @@ and:
 - ⏸ Prometheus metrics
 - ⏸ Grafana dashboard
 - ⏸ OpenTelemetry
-- ⏸ Cloud deployment
+- ⏸ Implement Google Cloud Run + MongoDB Atlas deployment
 - ⏸ Authentication / authorization
 - ⏸ AI / semantic search extension
 
@@ -2391,33 +2489,26 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Decide deployment target
+### NEXT: Decide the future AI extension
 
-Resolve **Q-020**:
+Resolve **Q-021**:
 
-> Should the portfolio MVP be publicly deployed, and if so, where?
+> Should the project include an AI-related extension after the core MVP is complete, and if so, which one?
 
-Possible directions:
+Potential directions:
 
-- local/Docker-only demonstration,
-- AWS,
-- Azure,
-- Render,
-- Railway,
-- Fly.io,
-- another suitable platform.
+- semantic issue search,
+- semantic pull request search,
+- issue classification,
+- pull request summarization,
+- repository knowledge assistant,
+- embeddings,
+- RAG over repository engineering activity,
+- natural-language analytics.
 
-The decision should consider:
+The AI feature must remain outside the core MVP until the Python + MongoDB backend is complete and portfolio-ready.
 
-- portfolio value of a live demo,
-- operating cost,
-- MongoDB hosting requirements,
-- secret management,
-- ease of deployment,
-- whether public write/sync endpoints require API-key protection,
-- whether deployment complexity distracts from the backend/MongoDB goals.
-
-Deployment is not required for the coding phase, but the final portfolio presentation may benefit from a live read-only API.
+The decision should prioritize an extension that naturally builds on the collected GitHub data and strengthens the project's AI-engineering portfolio value without obscuring the core backend architecture.
 
 ---
 
@@ -2449,6 +2540,7 @@ Deployment is not required for the coding phase, but the final portfolio present
 | D-022 | Use GitHub Actions with parallel quality and test jobs; defer image build/deployment | ✅ Confirmed |
 | D-023 | Use structured logging, correlation IDs, health/readiness checks, and centralized exception handling | ✅ Confirmed |
 | D-024 | Keep the MVP backend/API-only and use FastAPI generated API documentation as the UI | ✅ Confirmed |
+| D-025 | Deploy publicly on Google Cloud Run with MongoDB Atlas Free and conservative free-tier cost controls | ✅ Confirmed |
 
 ---
 
@@ -2604,6 +2696,21 @@ Deployment is not required for the coding phase, but the final portfolio present
 - FastAPI Swagger/OpenAPI documentation will be the primary interactive interface.
 - A standalone frontend/dashboard is deferred.
 - Next task changed to Q-020: decide the deployment target.
+
+---
+
+### 2026-10-29 — Deployment decision
+
+- Q-020 resolved: public deployment target selected.
+- FastAPI will be deployed on Google Cloud Run.
+- MongoDB will use a MongoDB Atlas Free cluster, preferably backed by GCP.
+- Cloud Run will use scale-to-zero and a low maximum instance count to minimize cost risk.
+- Read-only analytics and generated API documentation may remain public.
+- Write and synchronization endpoints remain protected with an API key.
+- Billing alerts and conservative resource limits are required.
+- The deployment is designed to remain within commercial cloud free tiers and target 0 EUR operating cost.
+- Deployment automation remains deferred until application containerization and deployment configuration are stable.
+- Next task changed to Q-021: decide the future AI extension.
 
 ---
 
