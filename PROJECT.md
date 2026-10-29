@@ -41,7 +41,7 @@ A key design goal is to use MongoDB where its document-oriented model provides a
 
 **Current milestone:** Define the MVP data requirements and MongoDB model before implementation.
 
-**Next step:** Select the code-quality tooling and formatting/type-checking strategy.
+**Next step:** Define the CI/CD pipeline and GitHub Actions workflow.
 
 ---
 
@@ -332,6 +332,14 @@ Integration tests use a separate Testcontainers-managed MongoDB instance. Mongo 
 **Decision:** Use `uv` for Python project, dependency, virtual-environment, and lockfile management.
 
 Dependencies are declared in `pyproject.toml`; `uv.lock` is committed for reproducibility; `.venv/` remains local and uncommitted. Runtime and development dependencies are managed separately.
+
+---
+
+### D-021 — Code Quality Tooling
+
+**Decision:** Use Ruff for linting and formatting, mypy for static type checking, pytest for tests, and pre-commit for fast local quality checks.
+
+Black is intentionally omitted because Ruff formatter provides the formatting layer. The project's own code starts from a strict mypy posture, with only targeted exceptions for third-party typing limitations.
 
 ---
 
@@ -1542,17 +1550,72 @@ They remain valid Python tooling choices, but `uv` provides a simpler unified wo
 
 ### Q-016 — Code quality tooling
 
-**Status:** OPEN
+**Status:** DECIDED
 
-Candidates:
+**Decision:** Use Ruff for linting and formatting, mypy for static type checking, pytest for testing, and pre-commit for fast local quality checks.
 
-- Ruff
-- Black
-- mypy
-- pytest
-- pre-commit
+Black will not be used separately.
 
-**Decision:** _To be determined._
+#### Ruff
+
+Use Ruff for:
+
+- linting,
+- import-related checks,
+- common bug-prone patterns,
+- formatting.
+
+Ruff formatter replaces Black in this project to avoid redundant formatting tools.
+
+Configuration belongs in `pyproject.toml`.
+
+The initial lint rule set should be intentionally useful rather than maximally broad.
+
+Avoid enabling rule groups that conflict with the formatter or create large amounts of low-value noise.
+
+#### mypy
+
+Use mypy for static type checking.
+
+Because this is a greenfield project, start from a strict typing posture for the project's own code.
+
+If third-party libraries have incomplete or incompatible typing, relax checks only in narrowly scoped configuration sections rather than globally weakening the project.
+
+#### pytest
+
+Use pytest as the main test runner.
+
+Testing strategy and test layers are defined separately in Q-013.
+
+#### pre-commit
+
+Use pre-commit for fast local checks before commits.
+
+Planned checks:
+
+```text
+ruff check --fix
+ruff format
+mypy
+```
+
+The pre-commit workflow should remain fast.
+
+Do not run the full integration and Testcontainers test suite on every local commit.
+
+#### CI responsibility
+
+The complete test suite belongs in CI, including:
+
+- unit tests,
+- API tests,
+- GitHub client tests,
+- MongoDB integration tests,
+- coverage reporting.
+
+Local pre-commit checks and CI checks must be complementary rather than duplicates of the entire pipeline.
+
+**Decision summary:** Ruff handles linting and formatting, mypy handles strict static typing, pytest handles tests, and pre-commit provides fast local quality gates. Black is not used separately.
 
 ---
 
@@ -1763,7 +1826,7 @@ docs/architecture.md
 - ⬜ Add structured logging
 - ⬜ Add health endpoint
 - ⬜ Add test infrastructure
-- ⬜ Add linting/type checking
+- ⬜ Add Ruff lint/format and mypy type checking
 - ⬜ Add Docker Compose for MongoDB development instance
 - ⬜ Add `.env.example` and `.gitignore` secret rules
 
@@ -1866,7 +1929,7 @@ docs/performance.md
 - ⬜ Run unit tests in CI
 - ⬜ Run MongoDB integration tests in CI
 - ⬜ Add coverage report
-- ⬜ Add pre-commit configuration
+- ⬜ Add pre-commit configuration for Ruff and mypy
 
 ---
 
@@ -2065,29 +2128,27 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Select code-quality tooling
+### NEXT: Define CI/CD
 
-Resolve **Q-016**:
+Resolve **Q-017**:
 
-> Which tools should enforce formatting, linting, type checking, and pre-commit quality checks?
+> What should the GitHub Actions pipeline run, and on which events?
 
-Candidates include:
+The decision should cover:
 
-- Ruff for linting,
-- Ruff formatter or Black for formatting,
-- mypy for static type checking,
-- pytest for testing,
-- pre-commit for local automated checks.
+- triggers such as push and pull request,
+- `uv` setup and dependency synchronization,
+- Ruff linting,
+- Ruff formatting check,
+- mypy type checking,
+- unit tests,
+- API/GitHub-client tests,
+- MongoDB integration tests with Testcontainers,
+- coverage reporting,
+- whether Docker image build should be part of the MVP pipeline,
+- whether deployment belongs in CI/CD now or should remain deferred.
 
-Key decisions:
-
-- whether Ruff formatter replaces Black,
-- which Ruff rule groups should be enabled initially,
-- how strict mypy should be in the MVP,
-- which checks should run through pre-commit,
-- which checks must also run in CI.
-
-The goal is a modern, maintainable toolchain without redundant tools.
+The goal is to make the GitHub repository self-validating without introducing unnecessary deployment complexity.
 
 ---
 
@@ -2115,6 +2176,7 @@ The goal is a modern, maintainable toolchain without redundant tools.
 | D-018 | Use layered testing with Testcontainers-based real MongoDB integration tests and mocked GitHub HTTP transport | ✅ Confirmed |
 | D-019 | Run FastAPI on the host, MongoDB in Docker Compose, and integration-test MongoDB via Testcontainers | ✅ Confirmed |
 | D-020 | Use uv with pyproject.toml, committed uv.lock, local .venv, and separate runtime/dev dependencies | ✅ Confirmed |
+| D-021 | Use Ruff for lint/format, mypy for typing, pytest for tests, and pre-commit for local quality checks | ✅ Confirmed |
 
 ---
 
@@ -2240,6 +2302,19 @@ The goal is a modern, maintainable toolchain without redundant tools.
 - Runtime and development dependencies will be managed separately.
 - Poetry and pip/requirements-based workflows are not used in the MVP.
 - Next task changed to Q-016: select code-quality tooling.
+
+---
+
+### 2026-10-29 — Code quality decision
+
+- Q-016 resolved: code-quality tooling selected.
+- Ruff will handle both linting and formatting.
+- Black will not be used separately.
+- mypy will provide static type checking with a strict posture for project-owned code.
+- pytest remains the main test runner.
+- pre-commit will run fast local checks such as Ruff and mypy.
+- Full unit, API, GitHub-client, integration, and coverage checks remain CI responsibilities.
+- Next task changed to Q-017: define CI/CD.
 
 ---
 
