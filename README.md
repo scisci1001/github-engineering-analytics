@@ -27,3 +27,9 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 ```
+
+## Branding
+
+The application serves the project favicon at:
+
+- http://localhost:8000/favicon.ico
