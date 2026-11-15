@@ -389,6 +389,146 @@ LangChain and similar orchestration frameworks are intentionally deferred for th
 
 ---
 
+
+### I-001 — Python Project Bootstrap
+
+**Decision:** Initialize the application as a Python 3.13 `uv` application project using a `src/` layout.
+
+Core structure:
+
+```text
+src/github_analytics/
+├── api/
+├── application/
+├── config/
+├── domain/
+├── infrastructure/
+│   ├── github/
+│   └── mongodb/
+└── main.py
+```
+
+The application remains backend-focused and uses FastAPI as the transport layer.
+
+Python version policy:
+
+```text
+.python-version -> 3.13
+requires-python = ">=3.13,<3.14"
+```
+
+The project is an application rather than a reusable library, so supporting multiple Python minor versions is not an MVP requirement.
+
+---
+
+### I-002 — Python Tooling Configuration
+
+**Decision:** Centralize Python project metadata, dependencies, linting, formatting, static typing, test configuration, and coverage configuration in `pyproject.toml`.
+
+Runtime dependencies:
+
+- FastAPI
+- HTTPX
+- pydantic-settings
+- PyMongo
+- Uvicorn
+
+Development dependencies:
+
+- mypy
+- pre-commit
+- pytest
+- pytest-asyncio
+- pytest-cov
+- Ruff
+- Testcontainers
+
+Ruff configuration:
+
+```text
+target-version = py313
+line-length = 120
+rules = E, F, I, UP, B, SIM
+```
+
+`E501` remains ignored because line wrapping is handled by the formatter.
+
+mypy configuration:
+
+```text
+strict = true
+```
+
+pytest configuration:
+
+```text
+asyncio_mode = auto
+```
+
+Coverage uses branch coverage.
+
+Exact dependency resolution is stored in the committed `uv.lock`.
+
+---
+
+### I-003 — Repository Ignore Policy
+
+**Decision:** Keep `.gitignore` project-specific rather than using the full generic Python template.
+
+Ignore only relevant generated/local artifacts such as:
+
+- Python bytecode/cache,
+- `.venv/`,
+- local `.env` files,
+- pytest/coverage artifacts,
+- mypy/Ruff caches,
+- packaging output,
+- IDE metadata,
+- OS-specific temporary files,
+- log files.
+
+Do not ignore:
+
+- `.python-version`,
+- `uv.lock`,
+- `.env.example`.
+
+---
+
+### I-004 — Initial FastAPI Bootstrap
+
+**Decision:** The initial runnable application contains:
+
+- typed `Settings` implemented with `pydantic-settings`,
+- cached `get_settings()`,
+- FastAPI `create_app()` application factory,
+- module-level `app = create_app()`,
+- `/health` endpoint,
+- first API test using FastAPI `TestClient`,
+- `.env.example`,
+- minimal README run/test/quality-check instructions.
+
+Initial `/health` behavior:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+The initial bootstrap intentionally does not yet include:
+
+- MongoDB connection lifecycle,
+- `/ready`,
+- GitHub API calls,
+- repository persistence,
+- synchronization,
+- analytics,
+- application containerization,
+- cloud deployment.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -2616,24 +2756,21 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Start implementation planning
+### NEXT: Add MongoDB local development and application lifecycle integration
 
-All current architecture/design questions through Q-021 are resolved.
+The initial Python/FastAPI bootstrap is defined and implemented.
 
-The next step is to turn the design into an implementation sequence.
+The next implementation milestone is:
 
-Start with the first coding milestone:
+1. add Docker Compose for local MongoDB,
+2. add MongoDB client creation and shutdown lifecycle,
+3. integrate MongoDB through FastAPI lifespan handling,
+4. expose the MongoDB database/client through infrastructure boundaries,
+5. add `/ready` that verifies MongoDB connectivity,
+6. add tests for ready/not-ready behavior,
+7. keep `/health` independent from MongoDB availability.
 
-1. initialize the Python project with `uv`,
-2. create the package/module structure,
-3. add FastAPI application bootstrap,
-4. add typed settings with `pydantic-settings`,
-5. configure Ruff, mypy, pytest, and pre-commit,
-6. add Docker Compose for local MongoDB,
-7. define MongoDB collections/index initialization,
-8. add the first repository API and persistence slice.
-
-Implementation should continue incrementally, preserving the architectural boundaries defined in this document.
+Do not add repository synchronization or analytics logic until the database lifecycle and readiness behavior are stable.
 
 ---
 
@@ -2667,6 +2804,17 @@ Implementation should continue incrementally, preserving the architectural bound
 | D-024 | Keep the MVP backend/API-only and use FastAPI generated API documentation as the UI | ✅ Confirmed |
 | D-025 | Deploy publicly on Google Cloud Run with MongoDB Atlas Free and conservative free-tier cost controls | ✅ Confirmed |
 | D-026 | Add post-MVP semantic search with EmbeddingService and MongoDB Vector Search; defer RAG orchestration frameworks | ✅ Confirmed |
+
+---
+
+### Implementation Decision Log
+
+| ID | Decision | Status |
+| --- | --- | --- |
+| I-001 | Use Python 3.13, uv, and a src-based application layout | ✅ Confirmed |
+| I-002 | Configure dependencies, Ruff, mypy, pytest, and coverage in pyproject.toml; use 120-character line length | ✅ Confirmed |
+| I-003 | Use a minimal project-specific .gitignore and commit .python-version, uv.lock, and .env.example | ✅ Confirmed |
+| I-004 | Bootstrap typed settings, FastAPI application factory, /health, and the first API test | ✅ Implemented |
 
 ---
 
@@ -2851,6 +2999,25 @@ Implementation should continue incrementally, preserving the architectural bound
 - LangChain and similar orchestration frameworks are deferred for the first AI implementation.
 - All current design questions through Q-021 are now resolved.
 - Next task changed from architecture decisions to implementation planning.
+
+---
+
+### 2026-11-15 — Initial implementation bootstrap
+
+- Architecture/design questions Q-001 through Q-021 remain resolved.
+- Python 3.13 selected for the application.
+- `uv` project layout and dependency strategy confirmed.
+- Ruff line length changed from 100 to 120 characters.
+- `pyproject.toml` now defines runtime dependencies, development dependencies, Ruff, strict mypy, pytest, and branch coverage configuration.
+- `.python-version` is set to `3.13`.
+- The generic Python `.gitignore` was reduced to project-relevant entries.
+- `.python-version`, `uv.lock`, and `.env.example` remain tracked.
+- Typed settings implemented with `pydantic-settings`.
+- FastAPI `create_app()` application factory implemented.
+- `/health` endpoint implemented.
+- First FastAPI API test implemented with `TestClient`.
+- Initial README run/test/quality-check commands created.
+- MongoDB lifecycle and `/ready` are the next implementation milestone.
 
 ---
 
