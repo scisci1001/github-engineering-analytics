@@ -529,6 +529,126 @@ The initial bootstrap intentionally does not yet include:
 
 ---
 
+### I-005 — Async MongoDB and Application Readiness
+
+**Decision:** Use asynchronous I/O consistently across GitHub HTTP calls and MongoDB operations.
+
+MongoDB will use PyMongo `AsyncMongoClient`.
+
+The async choice is made for architectural consistency and non-blocking I/O, not because synchronous PyMongo would be technically invalid.
+
+The main request path is expected to contain multiple I/O-bound operations:
+
+```text
+FastAPI async endpoint
+        |
+        +--> async GitHub HTTP request
+        |
+        +--> async MongoDB operation
+```
+
+Keeping the external HTTP client and database client async avoids mixing event-loop code with blocking database calls or thread-pool boundaries.
+
+#### FastAPI lifecycle
+
+Create and close the MongoDB client through FastAPI lifespan handling.
+
+Do not create a global MongoDB client at module-import time.
+
+Lifecycle:
+
+```text
+FastAPI startup
+    |
+    v
+AsyncMongoClient
+    |
+    v
+Application running
+    |
+    v
+FastAPI shutdown
+    |
+    v
+client.close()
+```
+
+#### Local MongoDB
+
+Run MongoDB locally with Docker Compose and a persistent development volume.
+
+The FastAPI application continues to run directly on the host during normal development.
+
+```text
+Host: IntelliJ / uv / FastAPI
+        |
+        | localhost:27017
+        v
+Docker Compose: MongoDB
+```
+
+#### Health and readiness
+
+Keep `/health` independent from infrastructure dependencies.
+
+`GET /health` answers whether the application process is alive.
+
+Add:
+
+```text
+GET /ready
+```
+
+The readiness endpoint performs a MongoDB `ping`.
+
+Expected healthy response:
+
+```json
+{
+  "status": "ready",
+  "mongodb": "ok"
+}
+```
+
+If MongoDB is unavailable, `/ready` returns:
+
+```text
+503 Service Unavailable
+```
+
+rather than a generic 500 response.
+
+#### MongoDB timeout
+
+Use a short configurable MongoDB server-selection timeout so readiness failures are reported quickly.
+
+Initial development value:
+
+```text
+2000 ms
+```
+
+Configuration example:
+
+```text
+MONGODB_SERVER_SELECTION_TIMEOUT_MS=2000
+```
+
+#### Testing
+
+API-level readiness tests should not depend on a real MongoDB instance.
+
+Use a fake/mock MongoDB dependency for:
+
+- ready -> 200,
+- unavailable -> 503.
+
+Real MongoDB behavior is tested separately using Testcontainers.
+
+**Decision summary:** Use PyMongo `AsyncMongoClient` and keep GitHub HTTP plus MongoDB access consistently async. Manage the MongoDB client through FastAPI lifespan, run local MongoDB in Docker Compose, keep `/health` infrastructure-independent, and add `/ready` with MongoDB ping and explicit 503 behavior.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -2756,21 +2876,24 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Add MongoDB local development and application lifecycle integration
+### NEXT: Implement MongoDB lifecycle and readiness
 
-The initial Python/FastAPI bootstrap is defined and implemented.
+I-005 is confirmed.
 
-The next implementation milestone is:
+The next implementation milestone is to create:
 
-1. add Docker Compose for local MongoDB,
-2. add MongoDB client creation and shutdown lifecycle,
-3. integrate MongoDB through FastAPI lifespan handling,
-4. expose the MongoDB database/client through infrastructure boundaries,
-5. add `/ready` that verifies MongoDB connectivity,
-6. add tests for ready/not-ready behavior,
-7. keep `/health` independent from MongoDB availability.
+1. `compose.yaml` with MongoDB and a persistent development volume,
+2. `src/github_analytics/infrastructure/mongodb/client.py`,
+3. PyMongo `AsyncMongoClient` creation and shutdown,
+4. FastAPI lifespan integration,
+5. `MONGODB_SERVER_SELECTION_TIMEOUT_MS` settings support,
+6. `GET /ready`,
+7. API tests for ready/unavailable states using a fake/mock database dependency,
+8. later, a Testcontainers-based MongoDB integration test.
 
-Do not add repository synchronization or analytics logic until the database lifecycle and readiness behavior are stable.
+Keep `/health` independent from MongoDB availability.
+
+Do not add repository synchronization or analytics logic until this infrastructure slice is stable.
 
 ---
 
@@ -2815,6 +2938,7 @@ Do not add repository synchronization or analytics logic until the database life
 | I-002 | Configure dependencies, Ruff, mypy, pytest, and coverage in pyproject.toml; use 120-character line length | ✅ Confirmed |
 | I-003 | Use a minimal project-specific .gitignore and commit .python-version, uv.lock, and .env.example | ✅ Confirmed |
 | I-004 | Bootstrap typed settings, FastAPI application factory, /health, and the first API test | ✅ Implemented |
+| I-005 | Use async GitHub/MongoDB I/O with AsyncMongoClient, lifespan management, Docker Compose MongoDB, and /ready | ✅ Confirmed |
 
 ---
 
@@ -3018,6 +3142,22 @@ Do not add repository synchronization or analytics logic until the database life
 - First FastAPI API test implemented with `TestClient`.
 - Initial README run/test/quality-check commands created.
 - MongoDB lifecycle and `/ready` are the next implementation milestone.
+
+---
+
+### 2026-11-16 — Async MongoDB architecture decision
+
+- I-005 confirmed.
+- MongoDB access will use PyMongo `AsyncMongoClient`.
+- GitHub HTTP and MongoDB operations will use async I/O consistently.
+- Async MongoDB is chosen for architectural consistency and non-blocking I/O, not because synchronous PyMongo would be invalid.
+- MongoDB client creation and shutdown will be managed through FastAPI lifespan.
+- Local MongoDB will run in Docker Compose with persistent storage.
+- `/health` remains independent from MongoDB.
+- `/ready` will perform a MongoDB ping and return 503 when MongoDB is unavailable.
+- MongoDB server-selection timeout will initially be 2000 ms and configurable.
+- API readiness tests will use fake/mock dependencies; real MongoDB integration tests will use Testcontainers.
+- Next implementation task: build the MongoDB lifecycle and readiness slice.
 
 ---
 
