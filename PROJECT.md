@@ -649,6 +649,143 @@ Real MongoDB behavior is tested separately using Testcontainers.
 
 ---
 
+### I-006 — Package Build Configuration
+
+**Decision:** Use `uv_build` as the project build backend and explicitly map the distribution name to the shorter Python package name.
+
+Project/distribution name:
+
+```text
+github-engineering-analytics
+```
+
+Python import package:
+
+```text
+github_analytics
+```
+
+Required `pyproject.toml` configuration:
+
+```toml
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "github_analytics"
+```
+
+This is required because `uv_build` would otherwise derive the module name `github_engineering_analytics` from the project name.
+
+---
+
+### I-007 — Test Environment Warning Cleanup
+
+**Decision:** Keep the test environment warning-free where practical.
+
+Add the following pytest-asyncio configuration explicitly:
+
+```toml
+asyncio_default_fixture_loop_scope = "function"
+```
+
+This avoids relying on a changing future default.
+
+Add `httpx2` as a development dependency for Starlette/FastAPI `TestClient` compatibility while retaining regular `httpx` as the runtime HTTP client for GitHub API integration.
+
+```text
+runtime:
+    httpx
+
+dev/test:
+    httpx2
+```
+
+---
+
+### I-008 — Project Favicon
+
+**Decision:** Add a project-specific favicon and serve it from:
+
+```text
+GET /favicon.ico
+```
+
+The route is excluded from OpenAPI documentation.
+
+The favicon is stored under:
+
+```text
+src/github_analytics/static/favicon.ico
+```
+
+An API test verifies that the favicon returns `200 OK` with the `image/x-icon` content type.
+
+---
+
+### I-009 — MongoDB Readiness Slice Implementation
+
+**Decision:** Implement the first MongoDB infrastructure slice with:
+
+- Docker Compose for local MongoDB,
+- PyMongo `AsyncMongoClient`,
+- FastAPI lifespan-based MongoDB client creation/shutdown,
+- configurable MongoDB server-selection timeout,
+- `/ready` endpoint,
+- `503 Service Unavailable` when MongoDB cannot be reached,
+- API readiness tests using dependency overrides/fakes.
+
+The readiness implementation keeps `/health` independent from MongoDB availability.
+
+The intended development flow is:
+
+```text
+docker compose up -d
+uv run pytest
+uv run uvicorn github_analytics.main:app --reload
+```
+
+---
+
+### I-010 — Local MongoDB Version Compatibility
+
+**Decision:** Use MongoDB 4.4 for local Docker-based development on the current development machine because the CPU does not support AVX.
+
+MongoDB 5.0 and newer require AVX and therefore exit immediately on this machine.
+
+Local Compose image:
+
+```yaml
+image: mongo:4.4
+```
+
+This is a development-machine compatibility workaround, not an architectural downgrade.
+
+Environment split:
+
+```text
+Local development:
+    MongoDB 4.4
+    -> CRUD
+    -> indexes
+    -> compatible aggregation pipelines
+    -> sync logic
+    -> local API/integration development
+
+Cloud / portfolio deployment:
+    MongoDB Atlas current supported version
+    -> production-like deployment
+    -> modern MongoDB capabilities
+    -> Vector Search / AI extension
+```
+
+Features that require newer MongoDB versions must not be assumed to work in the local 4.4 container.
+
+MongoDB Vector Search remains an Atlas/cloud concern and is not expected to run in the local MongoDB 4.4 environment.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -2876,24 +3013,27 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Implement MongoDB lifecycle and readiness
+### NEXT: Stabilize local MongoDB development and begin persistence initialization
 
-I-005 is confirmed.
+The application bootstrap and MongoDB readiness slice are implemented.
 
-The next implementation milestone is to create:
+The next implementation milestone is:
 
-1. `compose.yaml` with MongoDB and a persistent development volume,
-2. `src/github_analytics/infrastructure/mongodb/client.py`,
-3. PyMongo `AsyncMongoClient` creation and shutdown,
-4. FastAPI lifespan integration,
-5. `MONGODB_SERVER_SELECTION_TIMEOUT_MS` settings support,
-6. `GET /ready`,
-7. API tests for ready/unavailable states using a fake/mock database dependency,
-8. later, a Testcontainers-based MongoDB integration test.
+1. run local MongoDB 4.4 successfully through Docker Compose,
+2. verify `/ready` returns 200 with the local database running,
+3. define MongoDB collection initialization,
+4. add schema validation where useful,
+5. create the initial indexes for:
+   - `repositories`,
+   - `pull_requests`,
+   - `issues`,
+   - `sync_states`,
+6. add Testcontainers-based MongoDB integration testing,
+7. implement the first repository persistence slice.
 
-Keep `/health` independent from MongoDB availability.
+Keep compatibility differences between local MongoDB 4.4 and the future MongoDB Atlas deployment explicit.
 
-Do not add repository synchronization or analytics logic until this infrastructure slice is stable.
+Do not introduce AI/vector-search functionality into the local MVP path.
 
 ---
 
@@ -2939,6 +3079,11 @@ Do not add repository synchronization or analytics logic until this infrastructu
 | I-003 | Use a minimal project-specific .gitignore and commit .python-version, uv.lock, and .env.example | ✅ Confirmed |
 | I-004 | Bootstrap typed settings, FastAPI application factory, /health, and the first API test | ✅ Implemented |
 | I-005 | Use async GitHub/MongoDB I/O with AsyncMongoClient, lifespan management, Docker Compose MongoDB, and /ready | ✅ Confirmed |
+| I-006 | Use uv_build and explicitly map project name to the github_analytics Python package | ✅ Implemented |
+| I-007 | Set pytest-asyncio fixture loop scope explicitly and add httpx2 for TestClient compatibility | ✅ Confirmed |
+| I-008 | Add and serve a project favicon at /favicon.ico | ✅ Implemented |
+| I-009 | Implement async MongoDB lifecycle, /ready, and readiness API tests | ✅ Implemented |
+| I-010 | Use MongoDB 4.4 locally because the development CPU lacks AVX; use current Atlas in cloud | ✅ Confirmed |
 
 ---
 
@@ -3158,6 +3303,24 @@ Do not add repository synchronization or analytics logic until this infrastructu
 - MongoDB server-selection timeout will initially be 2000 ms and configurable.
 - API readiness tests will use fake/mock dependencies; real MongoDB integration tests will use Testcontainers.
 - Next implementation task: build the MongoDB lifecycle and readiness slice.
+
+---
+
+### 2026-11-17 — Bootstrap stabilization and local MongoDB compatibility
+
+- Python 3.13 environment confirmed working through `uv`.
+- `uv_build` added as the build backend.
+- The Python module name is explicitly configured as `github_analytics`.
+- `uv sync`, package import, pytest, and local FastAPI startup were validated.
+- pytest-asyncio fixture loop scope is explicitly set to `function`.
+- `httpx2` is selected as a development/test dependency for Starlette `TestClient` compatibility; runtime GitHub HTTP remains on `httpx`.
+- Project favicon added and served from `/favicon.ico`.
+- MongoDB readiness slice implemented with `AsyncMongoClient`, FastAPI lifespan, configurable timeout, `/ready`, and API tests.
+- Initial local `mongo:8` container failed with exit code 132 because the development CPU lacks AVX support.
+- Local Docker development therefore uses MongoDB 4.4.
+- MongoDB 4.4 is treated only as a local compatibility environment; cloud deployment remains MongoDB Atlas on a current supported version.
+- Newer MongoDB-only features, especially Vector Search, remain cloud/Atlas concerns.
+- Next task: initialize MongoDB collections/indexes and add real integration tests.
 
 ---
 

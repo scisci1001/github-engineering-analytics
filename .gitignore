@@ -6,6 +6,9 @@ __pycache__/
 # Virtual environment
 .venv/
 
+# own file
+.own
+
 # Environment / secrets
 .env
 .env.local
