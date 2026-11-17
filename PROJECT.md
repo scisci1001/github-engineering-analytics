@@ -786,6 +786,185 @@ MongoDB Vector Search remains an Atlas/cloud concern and is not expected to run 
 
 ---
 
+### I-011 — Layered FastAPI Application Structure
+
+**Decision:** Keep `main.py` as a minimal application entry point and move application assembly, routes, dependencies, and infrastructure concerns into dedicated modules.
+
+Target structure:
+
+```text
+src/github_analytics/
+├── main.py
+├── app.py
+├── api/
+│   ├── router.py
+│   ├── system.py
+│   └── dependencies.py
+├── application/
+├── domain/
+├── infrastructure/
+│   └── mongodb/
+└── config/
+```
+
+`main.py` should contain only:
+
+```python
+from github_analytics.app import create_app
+
+app = create_app()
+```
+
+`app.py` owns FastAPI application assembly and lifespan wiring.
+
+API routes use FastAPI terminology such as routers/endpoints rather than introducing Java-style controller naming.
+
+Application services will live under `application/`, while MongoDB and GitHub implementations remain under `infrastructure/`.
+
+The goal is separation of concerns without reproducing unnecessary Java/Spring ceremony.
+
+---
+
+### I-012 — Explicit MongoDB Schema Initialization Command
+
+**Decision:** Keep MongoDB collection/index/schema initialization separate from FastAPI startup.
+
+Add:
+
+```text
+src/github_analytics/infrastructure/mongodb/schema.py
+src/github_analytics/infrastructure/mongodb/init_db.py
+```
+
+`schema.py` defines:
+
+- collection validators,
+- index definitions,
+- the reusable `initialize_database()` function.
+
+`init_db.py` is a thin executable wrapper that:
+
+1. loads settings,
+2. creates a MongoDB connection,
+3. verifies connectivity,
+4. calls `initialize_database()`,
+5. closes the MongoDB client in `finally`.
+
+Run with:
+
+```powershell
+uv run python -m github_analytics.infrastructure.mongodb.init_db
+```
+
+The initializer is idempotent:
+
+- missing collections are created,
+- existing validators are updated with `collMod`,
+- indexes use stable explicit names and are reconciled by MongoDB.
+
+Initialization is intentionally not part of FastAPI startup so `/health` can still work if MongoDB is unavailable.
+
+---
+
+### I-013 — MongoDB Schema and Index Set
+
+**Decision:** Initialize and validate the four MVP collections:
+
+```text
+repositories
+pull_requests
+issues
+sync_states
+```
+
+Use MongoDB JSON Schema validation for stable required fields and BSON types without over-constraining future document evolution.
+
+Initial indexes include:
+
+#### repositories
+
+- unique `github_id`
+- unique `full_name`
+
+#### pull_requests
+
+- unique `(repository_id, number)`
+- `(repository_id, created_at)`
+- `(repository_id, merged_at)`
+- `(repository_id, author.github_id)`
+
+#### issues
+
+- unique `(repository_id, number)`
+- `(repository_id, created_at)`
+- `(repository_id, closed_at)`
+- `(repository_id, author.github_id)`
+
+#### sync_states
+
+- unique `(repository_id, resource)`
+
+The schema remains compatible with MongoDB 4.4 for local development.
+
+---
+
+### I-014 — Real MongoDB Integration Tests
+
+**Decision:** Use Testcontainers to validate real MongoDB behavior separately from mocked API tests.
+
+Integration tests explicitly use:
+
+```text
+mongo:4.4
+```
+
+because the current development CPU does not support AVX.
+
+The test suite verifies:
+
+- all expected collections are created,
+- all expected indexes are created,
+- unique indexes are enforced,
+- invalid documents are rejected by schema validation,
+- `initialize_database()` is idempotent.
+
+Tests use a unique temporary database and remove it after execution.
+
+Use the current Testcontainers import path:
+
+```python
+from testcontainers.community.mongodb import MongoDbContainer
+```
+
+rather than the deprecated legacy import.
+
+The integration test suite has been executed successfully on the development machine:
+
+```text
+5 passed
+```
+
+---
+
+### I-015 — uv Link Mode on Windows Development Machine
+
+**Decision:** Configure `uv` to use copy mode on the current development setup.
+
+The project resides on the `D:` drive while the default `uv` cache is typically on the user profile drive. Cross-filesystem hardlinks are therefore unavailable and `uv` falls back to file copies with a warning.
+
+Configure:
+
+```toml
+[tool.uv]
+link-mode = "copy"
+```
+
+This makes the intended behavior explicit and suppresses the hardlink fallback warning.
+
+This is a local/project-environment performance configuration and does not change dependency resolution or runtime behavior.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -3013,27 +3192,25 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Stabilize local MongoDB development and begin persistence initialization
+### NEXT: Implement the first repository persistence slice
 
-The application bootstrap and MongoDB readiness slice are implemented.
+The application structure, MongoDB lifecycle, schema initialization, indexes, and real integration tests are now established.
 
-The next implementation milestone is:
+The next implementation milestone is the `repositories` persistence slice:
 
-1. run local MongoDB 4.4 successfully through Docker Compose,
-2. verify `/ready` returns 200 with the local database running,
-3. define MongoDB collection initialization,
-4. add schema validation where useful,
-5. create the initial indexes for:
-   - `repositories`,
-   - `pull_requests`,
-   - `issues`,
-   - `sync_states`,
-6. add Testcontainers-based MongoDB integration testing,
-7. implement the first repository persistence slice.
+1. define the repository domain model,
+2. define the persistence-facing repository interface/protocol,
+3. implement the PyMongo repository,
+4. support insert/upsert by GitHub identity,
+5. support lookup by internal ID and/or `full_name`,
+6. map MongoDB documents to domain objects explicitly,
+7. add unit tests for mapping/service behavior,
+8. add MongoDB integration tests for repository persistence,
+9. only then expose the first repository API endpoints.
 
-Keep compatibility differences between local MongoDB 4.4 and the future MongoDB Atlas deployment explicit.
+Keep FastAPI routing thin and keep MongoDB-specific code inside `infrastructure/mongodb`.
 
-Do not introduce AI/vector-search functionality into the local MVP path.
+Do not add GitHub synchronization yet; establish the repository persistence abstraction first.
 
 ---
 
@@ -3084,6 +3261,11 @@ Do not introduce AI/vector-search functionality into the local MVP path.
 | I-008 | Add and serve a project favicon at /favicon.ico | ✅ Implemented |
 | I-009 | Implement async MongoDB lifecycle, /ready, and readiness API tests | ✅ Implemented |
 | I-010 | Use MongoDB 4.4 locally because the development CPU lacks AVX; use current Atlas in cloud | ✅ Confirmed |
+| I-011 | Keep main.py minimal; move app assembly, routers, dependencies, and infrastructure concerns into dedicated modules | ✅ Implemented |
+| I-012 | Use a separate idempotent MongoDB initialization command rather than running schema setup at FastAPI startup | ✅ Implemented |
+| I-013 | Define MongoDB validators and initial indexes for repositories, pull_requests, issues, and sync_states | ✅ Implemented |
+| I-014 | Validate MongoDB schema/index behavior with Testcontainers on mongo:4.4; integration suite passes | ✅ Implemented |
+| I-015 | Set uv link-mode=copy to avoid cross-filesystem hardlink fallback warnings on the Windows dev machine | ✅ Confirmed |
 
 ---
 
@@ -3321,6 +3503,27 @@ Do not introduce AI/vector-search functionality into the local MVP path.
 - MongoDB 4.4 is treated only as a local compatibility environment; cloud deployment remains MongoDB Atlas on a current supported version.
 - Newer MongoDB-only features, especially Vector Search, remain cloud/Atlas concerns.
 - Next task: initialize MongoDB collections/indexes and add real integration tests.
+
+---
+
+### 2026-11-17 — Layering, schema initialization, and integration testing
+
+- Application structure refactored so `main.py` is only the FastAPI entry point.
+- FastAPI application assembly and lifespan moved to `app.py`.
+- System routes moved to `api/system.py`; router composition moved to `api/router.py`.
+- MongoDB dependency access remains isolated through `api/dependencies.py`.
+- MongoDB schema initialization implemented as a separate idempotent command.
+- `schema.py` now owns collection validators, index definitions, and `initialize_database()`.
+- `init_db.py` runs schema initialization independently from FastAPI startup and closes its own MongoDB client after execution.
+- Schema initialization completed successfully on the local MongoDB 4.4 instance.
+- Testcontainers MongoDB integration tests added.
+- Integration tests validate collection creation, indexes, uniqueness, schema validation, and initializer idempotency.
+- The integration suite passes: 5 tests passed.
+- Testcontainers MongoDB import updated to `testcontainers.community.mongodb`.
+- pytest-asyncio fixture loop scope is explicitly configured as `function`.
+- `uv` hardlink fallback warning identified as a cross-filesystem issue on the Windows development setup.
+- `uv` copy link mode selected to make the intended behavior explicit and remove the warning.
+- Next task: implement the first `repositories` persistence slice.
 
 ---
 
