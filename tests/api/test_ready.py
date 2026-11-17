@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 from pymongo.errors import ServerSelectionTimeoutError
 
 from github_analytics.api.dependencies import get_mongo_database
+from github_analytics.app import create_app
 from github_analytics.infrastructure.mongodb.client import MongoHealthCheck
-from github_analytics.main import create_app
 
 
 class ReadyMongo:
