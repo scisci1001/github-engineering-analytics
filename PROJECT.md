@@ -1058,6 +1058,121 @@ The initial tests cover:
 
 ---
 
+### I-017 — Repository Application Service and Registration API
+
+**Decision:** Connect the GitHub repository metadata client and MongoDB repository persistence through an application-level `RepositoryService`, then expose the first write API endpoint.
+
+Flow:
+
+```text
+POST /repositories
+        |
+        v
+RepositoryService
+        |
+        +--> GitHubRepositoryClient
+        |
+        +--> RepositoryRepository
+```
+
+#### RepositoryService
+
+Add an application service responsible for orchestration:
+
+```python
+class RepositoryService:
+    async def register(self, full_name: str) -> GitHubRepository:
+        repository = await self._github_client.get_repository(full_name)
+        return await self._repository_repository.upsert(repository)
+```
+
+The service coordinates external GitHub metadata lookup and persistence without depending on FastAPI or PyMongo-specific APIs.
+
+#### API contract
+
+Add:
+
+```text
+POST /repositories
+```
+
+Request:
+
+```json
+{
+  "full_name": "fastapi/fastapi"
+}
+```
+
+The client supplies only the canonical GitHub repository identifier.
+
+The application fetches the remaining metadata from GitHub and persists it.
+
+#### API security
+
+The write endpoint is protected with:
+
+```text
+X-API-Key
+```
+
+API-key validation uses constant-time comparison.
+
+If API-key authentication is not configured, the protected endpoint is treated as unavailable.
+
+#### API models
+
+Use dedicated Pydantic request/response models rather than exposing domain objects directly.
+
+The response includes:
+
+- internal repository ID,
+- GitHub repository ID,
+- owner,
+- name,
+- full name,
+- default branch,
+- HTML URL,
+- GitHub timestamps,
+- persistence audit timestamps.
+
+#### Centralized exception mapping
+
+Register FastAPI exception handlers centrally.
+
+Mappings:
+
+```text
+RepositoryNotFoundError -> 404 Not Found
+GitHubRateLimitError    -> 503 Service Unavailable
+GitHubApiError          -> 502 Bad Gateway
+```
+
+Routes should not contain repeated transport-specific `try/except` logic.
+
+#### Lifecycle wiring
+
+FastAPI lifespan now owns both long-lived infrastructure clients:
+
+- MongoDB client,
+- GitHub HTTP client.
+
+Both are created during application startup and closed during shutdown.
+
+#### Testing
+
+Add:
+
+- unit tests for `RepositoryService` using fake GitHub/persistence implementations,
+- API tests using dependency overrides and a fake service,
+- no real GitHub calls in automated tests.
+
+The full test suite has been executed successfully after this slice was added.
+
+**Decision summary:** Repository registration is implemented through a thin FastAPI route, an application-level orchestration service, the GitHub client abstraction, and the MongoDB repository abstraction. The first protected write endpoint is now available.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -3285,26 +3400,26 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Implement RepositoryService and the first repository API endpoint
+### NEXT: Perform the first real local end-to-end repository registration
 
-The repository persistence layer and GitHub repository metadata client are now available.
+The first repository API slice is implemented and the complete automated test suite is green.
 
-The next implementation milestone is to connect them through the application layer:
+The next milestone is a controlled real local E2E check:
 
-1. add `RepositoryService`,
-2. accept a repository identifier such as `owner/repository`,
-3. fetch canonical metadata through `GitHubRepositoryClient`,
-4. persist it through `RepositoryRepository`,
-5. return the saved domain object,
-6. map `RepositoryNotFoundError`, `GitHubRateLimitError`, and `GitHubApiError` to HTTP responses centrally,
-7. add `POST /repositories`,
-8. keep the FastAPI route thin,
-9. add unit tests for the service using fake repository/GitHub client implementations,
-10. add API tests without calling the real GitHub API.
+1. configure a local `API_KEY`,
+2. optionally configure `GITHUB_TOKEN` for authenticated GitHub REST access,
+3. start local MongoDB,
+4. run the database initializer,
+5. start FastAPI,
+6. call `POST /repositories` with a real public repository such as `fastapi/fastapi`,
+7. verify the HTTP response,
+8. verify the persisted repository document in MongoDB/Compass,
+9. repeat the same request and confirm idempotent upsert behavior,
+10. only after this succeeds, add read-only repository endpoints.
 
-Do not start pull request/issue synchronization yet.
+Keep the first E2E test manual and controlled.
 
-The first API slice should only establish repository registration through GitHub metadata lookup plus MongoDB persistence.
+Do not begin pull request/issue synchronization until repository registration is verified against the real GitHub API and local MongoDB.
 
 ---
 
@@ -3361,6 +3476,7 @@ The first API slice should only establish repository registration through GitHub
 | I-014 | Validate MongoDB schema/index behavior with Testcontainers on mongo:4.4; integration suite passes | ✅ Implemented |
 | I-015 | Set uv link-mode=copy to avoid cross-filesystem hardlink fallback warnings on the Windows dev machine | ✅ Confirmed |
 | I-016 | Add async GitHub REST repository client with explicit API versioning, domain error mapping, and MockTransport tests | ✅ Implemented |
+| I-017 | Add RepositoryService and protected POST /repositories with centralized exception mapping and tests | ✅ Implemented |
 
 ---
 
@@ -3634,6 +3750,24 @@ The first API slice should only establish repository registration through GitHub
 - GitHub client tests use `httpx.MockTransport` and do not call the real GitHub API.
 - Settings extended with GitHub API base URL and API version.
 - Next task: connect the GitHub client and MongoDB repository through `RepositoryService`, then expose `POST /repositories`.
+
+---
+
+### 2026-11-17 — Repository registration API implemented
+
+- `RepositoryService` added to the application layer.
+- The service fetches canonical repository metadata through `GitHubRepositoryClient`.
+- Repository persistence remains behind `RepositoryRepository`.
+- `POST /repositories` added as the first write API endpoint.
+- The request contains only `full_name`; repository metadata comes from GitHub.
+- Write access is protected with `X-API-Key`.
+- Dedicated Pydantic request/response schemas added.
+- FastAPI exception handlers centralized for repository-not-found, GitHub rate-limit, and generic GitHub API failures.
+- FastAPI lifespan now manages both MongoDB and GitHub HTTP clients.
+- Unit tests added for `RepositoryService`.
+- API tests added with dependency overrides and no real GitHub calls.
+- Full automated test suite executed successfully: all tests green.
+- Next task: perform the first real local E2E repository registration against GitHub and MongoDB.
 
 ---
 
