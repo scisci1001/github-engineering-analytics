@@ -965,6 +965,99 @@ This is a local/project-environment performance configuration and does not chang
 
 ---
 
+### I-016 — GitHub Repository REST Client
+
+**Decision:** Add the first GitHub REST integration slice before exposing repository-creation API endpoints.
+
+The client is responsible for fetching canonical repository metadata from GitHub rather than requiring callers to provide all repository fields manually.
+
+Structure:
+
+```text
+application/github_repository_client.py
+domain/errors.py
+infrastructure/github/client.py
+tests/github/test_github_repository_client.py
+```
+
+#### Client boundary
+
+Define an application-level protocol:
+
+```python
+class GitHubRepositoryClient(Protocol):
+    async def get_repository(self, full_name: str) -> GitHubRepository: ...
+```
+
+The application layer depends on this protocol rather than directly on HTTPX.
+
+#### HTTP implementation
+
+Use async HTTPX for GitHub REST calls.
+
+The client sends:
+
+```text
+Accept: application/vnd.github+json
+X-GitHub-Api-Version: 2026-03-10
+Authorization: Bearer <token>   # when configured
+```
+
+Pinning the GitHub REST API version keeps behavior explicit and reproducible.
+
+Configuration:
+
+```text
+GITHUB_API_BASE_URL=https://api.github.com
+GITHUB_API_VERSION=2026-03-10
+GITHUB_TOKEN=<optional token>
+```
+
+#### Domain mapping
+
+Map the GitHub repository response directly into the existing `GitHubRepository` domain model.
+
+Canonical fields include:
+
+- GitHub repository ID,
+- owner,
+- name,
+- full name,
+- default branch,
+- HTML URL,
+- GitHub created timestamp,
+- GitHub updated timestamp.
+
+#### Error mapping
+
+Map transport/API outcomes into explicit domain/application errors:
+
+- HTTP 404 -> `RepositoryNotFoundError`
+- rate-limit response -> `GitHubRateLimitError`
+- other GitHub HTTP errors -> `GitHubApiError`
+
+This prevents FastAPI/application code from depending on raw HTTPX exceptions or status handling.
+
+#### Testing
+
+Use `httpx.MockTransport` for GitHub client tests.
+
+Tests must not call the real GitHub API.
+
+The initial tests cover:
+
+- successful repository mapping,
+- request headers,
+- authentication header,
+- 404 mapping,
+- rate-limit mapping,
+- generic server error mapping,
+- invalid `owner/repository` input.
+
+**Decision summary:** Fetch repository metadata through an async GitHub REST client behind an application protocol, pin the REST API version, map responses into the domain model, and isolate HTTP-specific errors from higher layers.
+
+---
+
 ## 7. Open Design Questions
 
 Each question should remain here until resolved.
@@ -3192,25 +3285,26 @@ The purpose of this document is to prevent loss of project context between conve
 
 ## 15. Next Action
 
-### NEXT: Implement the first repository persistence slice
+### NEXT: Implement RepositoryService and the first repository API endpoint
 
-The application structure, MongoDB lifecycle, schema initialization, indexes, and real integration tests are now established.
+The repository persistence layer and GitHub repository metadata client are now available.
 
-The next implementation milestone is the `repositories` persistence slice:
+The next implementation milestone is to connect them through the application layer:
 
-1. define the repository domain model,
-2. define the persistence-facing repository interface/protocol,
-3. implement the PyMongo repository,
-4. support insert/upsert by GitHub identity,
-5. support lookup by internal ID and/or `full_name`,
-6. map MongoDB documents to domain objects explicitly,
-7. add unit tests for mapping/service behavior,
-8. add MongoDB integration tests for repository persistence,
-9. only then expose the first repository API endpoints.
+1. add `RepositoryService`,
+2. accept a repository identifier such as `owner/repository`,
+3. fetch canonical metadata through `GitHubRepositoryClient`,
+4. persist it through `RepositoryRepository`,
+5. return the saved domain object,
+6. map `RepositoryNotFoundError`, `GitHubRateLimitError`, and `GitHubApiError` to HTTP responses centrally,
+7. add `POST /repositories`,
+8. keep the FastAPI route thin,
+9. add unit tests for the service using fake repository/GitHub client implementations,
+10. add API tests without calling the real GitHub API.
 
-Keep FastAPI routing thin and keep MongoDB-specific code inside `infrastructure/mongodb`.
+Do not start pull request/issue synchronization yet.
 
-Do not add GitHub synchronization yet; establish the repository persistence abstraction first.
+The first API slice should only establish repository registration through GitHub metadata lookup plus MongoDB persistence.
 
 ---
 
@@ -3266,6 +3360,7 @@ Do not add GitHub synchronization yet; establish the repository persistence abst
 | I-013 | Define MongoDB validators and initial indexes for repositories, pull_requests, issues, and sync_states | ✅ Implemented |
 | I-014 | Validate MongoDB schema/index behavior with Testcontainers on mongo:4.4; integration suite passes | ✅ Implemented |
 | I-015 | Set uv link-mode=copy to avoid cross-filesystem hardlink fallback warnings on the Windows dev machine | ✅ Confirmed |
+| I-016 | Add async GitHub REST repository client with explicit API versioning, domain error mapping, and MockTransport tests | ✅ Implemented |
 
 ---
 
@@ -3524,6 +3619,21 @@ Do not add GitHub synchronization yet; establish the repository persistence abst
 - `uv` hardlink fallback warning identified as a cross-filesystem issue on the Windows development setup.
 - `uv` copy link mode selected to make the intended behavior explicit and remove the warning.
 - Next task: implement the first `repositories` persistence slice.
+
+---
+
+### 2026-11-17 — GitHub repository client
+
+- First GitHub REST integration slice implemented.
+- Application-level `GitHubRepositoryClient` protocol added.
+- Async HTTPX implementation added under `infrastructure/github`.
+- GitHub REST API version explicitly pinned to `2026-03-10`.
+- Optional bearer-token authentication supported.
+- GitHub repository JSON is mapped directly to the `GitHubRepository` domain model.
+- Domain/application errors added for repository-not-found, rate-limit, and generic GitHub API failures.
+- GitHub client tests use `httpx.MockTransport` and do not call the real GitHub API.
+- Settings extended with GitHub API base URL and API version.
+- Next task: connect the GitHub client and MongoDB repository through `RepositoryService`, then expose `POST /repositories`.
 
 ---
 

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
 
     github_token: str | None = None
     api_key: str | None = None
+    github_api_base_url: str = "https://api.github.com"
+    github_api_version: str = "2026-03-10"
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
